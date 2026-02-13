@@ -12,23 +12,10 @@ struct AppTheme: Identifiable, Equatable {
     let success: Color
     let error: Color
     
-    // Matrix is now the default
+    // Deep Space is now the default
     static let defaultTheme = AppTheme(
-        id: "hacker", // Re-using hacker ID for consistency
-        name: "Matrix (Default)",
-        background: Color(hex: "000000"),
-        surface: Color(hex: "111111"),
-        textPrimary: Color(hex: "00FF00"),
-        textSecondary: Color(hex: "00FF00"),
-        accent: Color(hex: "00FF00"),
-        border: Color(hex: "00FF00"),
-        success: Color(hex: "00FF00"),
-        error: Color(hex: "FF0000")
-    )
-    
-    static let deepSpaceTheme = AppTheme(
-        id: "default", // Original default
-        name: "Deep Space",
+        id: "default", // Original default ID
+        name: "Deep Space (Default)",
         background: Color(hex: "0D1117"),
         surface: Color(hex: "161B22"),
         textPrimary: Color(hex: "F0F6FC"),
@@ -37,6 +24,19 @@ struct AppTheme: Identifiable, Equatable {
         border: Color(hex: "30363D"),
         success: Color(hex: "238636"),
         error: Color(hex: "DA3633")
+    )
+    
+    static let matrixTheme = AppTheme(
+        id: "hacker",
+        name: "Matrix",
+        background: Color(hex: "000000"),
+        surface: Color(hex: "111111"),
+        textPrimary: Color(hex: "00FF00"),
+        textSecondary: Color(hex: "00FF00"),
+        accent: Color(hex: "00FF00"),
+        border: Color(hex: "00FF00"),
+        success: Color(hex: "00FF00"),
+        error: Color(hex: "FF0000")
     )
     
     static let oceanTheme = AppTheme(
@@ -55,30 +55,30 @@ struct AppTheme: Identifiable, Equatable {
     static let sunsetTheme = AppTheme(
         id: "sunset",
         name: "Sunset",
-        background: Color(hex: "2D1B2E"),
-        surface: Color(hex: "462A48"),
-        textPrimary: Color(hex: "FFD8C9"),
-        textSecondary: Color(hex: "BFA0AA"),
-        accent: Color(hex: "FF9E64"),
-        border: Color(hex: "5C3A5E"),
-        success: Color(hex: "9ECE6A"),
-        error: Color(hex: "F7768E")
+        background: Color(hex: "2A1B1B"),
+        surface: Color(hex: "4A2C2C"),
+        textPrimary: Color(hex: "FDE047"),
+        textSecondary: Color(hex: "FCA5A5"),
+        accent: Color(hex: "F59E0B"),
+        border: Color(hex: "7F1D1D"),
+        success: Color(hex: "10B981"),
+        error: Color(hex: "EF4444")
     )
-    
+
     static let natureTheme = AppTheme(
         id: "nature",
         name: "Nature",
-        background: Color(hex: "1B3A26"), 
-        surface: Color(hex: "264D34"),    
-        textPrimary: Color(hex: "ECFDF5"), 
-        textSecondary: Color(hex: "A7F3D0"), 
-        accent: Color(hex: "34D399"),     
-        border: Color(hex: "059669"),     
-        success: Color(hex: "4ADE80"),    
+        background: Color(hex: "1A2F1A"),
+        surface: Color(hex: "2C442C"),
+        textPrimary: Color(hex: "D1FAE5"),
+        textSecondary: Color(hex: "A7F3D0"),
+        accent: Color(hex: "34D399"),
+        border: Color(hex: "065F46"),
+        success: Color(hex: "34D399"),
         error: Color(hex: "F87171")       
     )
     
-    static let allThemes = [defaultTheme, deepSpaceTheme, oceanTheme, sunsetTheme, natureTheme]
+    static let allThemes = [defaultTheme, matrixTheme, oceanTheme, sunsetTheme, natureTheme]
 }
 
 extension Color {
