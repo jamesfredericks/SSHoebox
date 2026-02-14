@@ -21,3 +21,5 @@ Package.resolved
 # Logs
 *.log
 
+# Distribution
+dist/
