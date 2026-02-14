@@ -87,11 +87,45 @@ PLIST
 
 # 6. Copy Resources (Bundles)
 echo "🖼️  Copying resource bundles..."
-if ls "${BUILD_DIR}"/*.bundle >/dev/null 2>&1; then
+if ls "${BUILD_DIR}"/*.bundle > /dev/null 2>&1; then
     cp -R "${BUILD_DIR}"/*.bundle "${APP_BUNDLE}/Contents/Resources/"
     echo "✅ Copied SPM resource bundles."
 fi
 
-# 7. Final Touch
-echo "✅ Successfully bundled ${APP_NAME}.app with icon in the '${DIST_DIR}' directory!"
-echo "✨ You can now move it to your /Applications folder."
+# 7. Ad-hoc Code Signing (Required for macOS to run the app)
+echo "🔏 Signing the app bundle..."
+codesign --force --deep --sign - "${APP_BUNDLE}"
+if [ $? -eq 0 ]; then
+    echo "✅ App bundle signed successfully."
+else
+    echo "⚠️  Code signing failed, but the app may still work."
+fi
+
+# 8. Remove quarantine attributes (if any)
+xattr -cr "${APP_BUNDLE}" 2>/dev/null || true
+
+# 9. Create distributable ZIP
+echo "📦 Creating distributable ZIP..."
+cd "${DIST_DIR}"
+zip -r "${APP_NAME}-v${VERSION}.zip" "${APP_NAME}.app" > /dev/null
+cd ..
+echo "✅ Created ${APP_NAME}-v${VERSION}.zip"
+
+# 10. Final Instructions
+echo ""
+echo "✅ Successfully bundled ${APP_NAME}.app in the '${DIST_DIR}' directory!"
+echo ""
+echo "📋 Distribution Options:"
+echo "   1. Local use: Move ${APP_NAME}.app to /Applications"
+echo "   2. GitHub Release: Upload ${APP_NAME}-v${VERSION}.zip"
+echo ""
+echo "⚠️  IMPORTANT: Users downloading from GitHub will need to:"
+echo "   1. Unzip the file"
+echo "   2. Right-click the app → Open (first time only)"
+echo "   3. Click 'Open' in the security dialog"
+echo ""
+echo "💡 For a better user experience, consider:"
+echo "   - Getting an Apple Developer account (\$99/year)"
+echo "   - Signing with a Developer ID certificate"
+echo "   - Notarizing the app with Apple"
+

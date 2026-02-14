@@ -80,6 +80,16 @@ struct MainView: View {
                         .foregroundStyle(DesignSystem.Colors.textSecondary)
                 }
             }
+            .toolbar {
+                ToolbarItem(placement: .automatic) {
+                    Button {
+                        viewModel.lock()
+                    } label: {
+                        Label("Lock Vault", systemImage: "lock.fill")
+                    }
+                    .help("Lock the vault")
+                }
+            }
         }
     }
 }

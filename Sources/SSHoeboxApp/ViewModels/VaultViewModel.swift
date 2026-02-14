@@ -12,6 +12,8 @@ class VaultViewModel: ObservableObject {
     
     var dbManager: DatabaseManager?
     private var vaultKey: SymmetricKey?
+    private var idleMonitor: IdleMonitor?
+    private var cancellables = Set<AnyCancellable>()
     
     // Path to the vault database
     private var dbPath: String {
@@ -59,6 +61,9 @@ class VaultViewModel: ObservableObject {
             self.isNewUser = false
             self.errorMessage = nil
             
+            // Start auto-lock monitoring
+            startAutoLockMonitoring()
+            
         } catch {
             self.errorMessage = "Failed to create vault: \(error.localizedDescription)"
         }
@@ -98,6 +103,9 @@ class VaultViewModel: ObservableObject {
             self.isUnlocked = true
             self.errorMessage = nil
             
+            // Start auto-lock monitoring
+            startAutoLockMonitoring()
+            
         } catch {
             self.errorMessage = "Unlock failed: \(error.localizedDescription)"
         }
@@ -129,6 +137,52 @@ class VaultViewModel: ObservableObject {
         self.isUnlocked = false
         self.vaultKey = nil
         self.dbManager = nil
+        
+        // Stop auto-lock monitoring
+        stopAutoLockMonitoring()
+    }
+    
+    // MARK: - Auto-Lock
+    
+    private func startAutoLockMonitoring() {
+        // Get timeout from UserDefaults (in minutes, 0 = disabled)
+        let timeoutMinutes = UserDefaults.standard.integer(forKey: "autoLockTimeout")
+        let timeoutInterval: TimeInterval
+        
+        if timeoutMinutes == 0 {
+            // First launch or "Never" selected - default to 15 minutes
+            if !UserDefaults.standard.bool(forKey: "hasSetAutoLockTimeout") {
+                timeoutInterval = 15 * 60 // 15 minutes default
+                UserDefaults.standard.set(15, forKey: "autoLockTimeout")
+                UserDefaults.standard.set(true, forKey: "hasSetAutoLockTimeout")
+            } else {
+                // User explicitly chose "Never"
+                timeoutInterval = 0
+            }
+        } else {
+            timeoutInterval = TimeInterval(timeoutMinutes * 60)
+        }
+        
+        // Create and start idle monitor
+        let monitor = IdleMonitor(timeoutInterval: timeoutInterval)
+        self.idleMonitor = monitor
+        
+        // Subscribe to idle events
+        monitor.$isIdle
+            .sink { [weak self] isIdle in
+                if isIdle {
+                    self?.lock()
+                }
+            }
+            .store(in: &cancellables)
+        
+        monitor.startMonitoring()
+    }
+    
+    private func stopAutoLockMonitoring() {
+        idleMonitor?.stopMonitoring()
+        idleMonitor = nil
+        cancellables.removeAll()
     }
     
     func getDependencies() -> (DatabaseManager, SymmetricKey)? {
