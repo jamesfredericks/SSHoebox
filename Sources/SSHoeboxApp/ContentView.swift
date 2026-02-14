@@ -12,6 +12,8 @@ struct ContentView: View {
     }
 }
 
+#if DEBUG && canImport(SwiftUI) && !os(Linux)
 #Preview {
     ContentView()
 }
+#endif
