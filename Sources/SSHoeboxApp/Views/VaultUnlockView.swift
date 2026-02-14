@@ -5,7 +5,6 @@ struct VaultUnlockView: View {
     @ObservedObject var viewModel: VaultViewModel
     @State private var password = ""
     @State private var confirmPassword = ""
-    @State private var showingResetAlert = false
     
     var body: some View {
         ZStack {
@@ -66,31 +65,10 @@ struct VaultUnlockView: View {
                         .font(.caption)
                         .foregroundStyle(DesignSystem.Colors.textSecondary)
                 }
-                
-                VStack(spacing: 15) {
-                    Divider()
-                        .background(DesignSystem.Colors.border)
-                    
-                    Button("Reset App (Delete All Data)") {
-                        showingResetAlert = true
-                    }
-                    .foregroundStyle(.red)
-                    .buttonStyle(.plain)
-                    .font(.caption)
-                }
-                .frame(maxWidth: 400)
             }
             .padding(40)
         }
         .frame(minWidth: 600, minHeight: 600)
-        .alert("Reset Application?", isPresented: $showingResetAlert) {
-            Button("Cancel", role: .cancel) { }
-            Button("Reset", role: .destructive) {
-                viewModel.resetApp()
-            }
-        } message: {
-            Text("This will delete all your hosts, credentials, and settings. This action cannot be undone.")
-        }
     }
     
     func submit() {
