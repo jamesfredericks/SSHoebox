@@ -2,20 +2,12 @@ import SwiftUI
 
 struct PreferencesView: View {
     @ObservedObject var themeManager = ThemeManager.shared
+    @State private var autoLockTimeout: Int = 15
     
     var body: some View {
         Form {
             Section {
-                Picker("Auto-lock after", selection: Binding(
-                    get: {
-                        let minutes = UserDefaults.standard.integer(forKey: "autoLockTimeout")
-                        return minutes == 0 && UserDefaults.standard.bool(forKey: "hasSetAutoLockTimeout") ? 0 : (minutes == 0 ? 15 : minutes)
-                    },
-                    set: { newValue in
-                        UserDefaults.standard.set(newValue, forKey: "autoLockTimeout")
-                        UserDefaults.standard.set(true, forKey: "hasSetAutoLockTimeout")
-                    }
-                )) {
+                Picker("Auto-lock after", selection: $autoLockTimeout) {
                     Text("5 minutes").tag(5)
                     Text("15 minutes").tag(15)
                     Text("30 minutes").tag(30)
@@ -23,6 +15,10 @@ struct PreferencesView: View {
                     Text("Never").tag(0)
                 }
                 .foregroundStyle(DesignSystem.Colors.textPrimary)
+                .onChange(of: autoLockTimeout) { newValue in
+                    UserDefaults.standard.set(newValue, forKey: "autoLockTimeout")
+                    UserDefaults.standard.set(true, forKey: "hasSetAutoLockTimeout")
+                }
             } header: {
                 Text("Security")
                     .foregroundStyle(DesignSystem.Colors.textSecondary)
@@ -69,5 +65,14 @@ struct PreferencesView: View {
         .scrollContentBackground(.hidden)
         .background(DesignSystem.Colors.background)
         .navigationTitle("Preferences")
+        .onAppear {
+            // Load saved preference
+            let saved = UserDefaults.standard.integer(forKey: "autoLockTimeout")
+            if saved == 0 && !UserDefaults.standard.bool(forKey: "hasSetAutoLockTimeout") {
+                autoLockTimeout = 15 // Default
+            } else {
+                autoLockTimeout = saved
+            }
+        }
     }
 }

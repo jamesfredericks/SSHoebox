@@ -176,7 +176,20 @@ class VaultViewModel: ObservableObject {
             }
             .store(in: &cancellables)
         
+        // Listen for timeout preference changes
+        NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+            .sink { [weak self] _ in
+                self?.restartAutoLockMonitoring()
+            }
+            .store(in: &cancellables)
+        
         monitor.startMonitoring()
+    }
+    
+    func restartAutoLockMonitoring() {
+        guard isUnlocked else { return }
+        stopAutoLockMonitoring()
+        startAutoLockMonitoring()
     }
     
     private func stopAutoLockMonitoring() {
