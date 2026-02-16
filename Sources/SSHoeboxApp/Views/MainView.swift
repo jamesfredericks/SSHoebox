@@ -24,26 +24,26 @@ struct MainView: View {
                     Section("Vault") {
                         NavigationLink(value: SidebarItem.hosts) {
                             Label("Hosts", systemImage: "server.rack")
-                                .foregroundStyle(DesignSystem.Colors.textPrimary)
+                                .foregroundColor(DesignSystem.Colors.textPrimary)
                         }
                     }
                     
                     Section("Tools") {
                         NavigationLink(value: SidebarItem.generator) {
                             Label("Generator", systemImage: "wand.and.stars")
-                                .foregroundStyle(DesignSystem.Colors.textPrimary)
+                                .foregroundColor(DesignSystem.Colors.textPrimary)
                         }
                     }
                     
                     Section("Settings") {
                         NavigationLink(value: SidebarItem.backups) {
                             Label("Backups", systemImage: "externaldrive.badge.icloud")
-                                .foregroundStyle(DesignSystem.Colors.textPrimary)
+                                .foregroundColor(DesignSystem.Colors.textPrimary)
                         }
                         
                         NavigationLink(value: SidebarItem.preferences) {
                             Label("Preferences", systemImage: "gear")
-                                .foregroundStyle(DesignSystem.Colors.textPrimary)
+                                .foregroundColor(DesignSystem.Colors.textPrimary)
                         }
                     }
                 }
@@ -57,6 +57,8 @@ struct MainView: View {
                     .ignoresSafeArea()
                     .allowsHitTesting(false) // Don't block traffic lights or list items
             }
+            .preferredColorScheme(themeManager.currentTheme.colorScheme)
+            .tint(DesignSystem.Colors.accent)
         } detail: {
             // FIX: Wrap detail in NavigationStack to prevent UI lockup and fix macOS navigation
             NavigationStack {

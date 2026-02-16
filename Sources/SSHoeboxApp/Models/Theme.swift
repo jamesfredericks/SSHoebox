@@ -11,6 +11,7 @@ struct AppTheme: Identifiable, Equatable {
     let border: Color
     let success: Color
     let error: Color
+    let colorScheme: ColorScheme
     
     // Deep Space is now the default
     static let defaultTheme = AppTheme(
@@ -23,7 +24,8 @@ struct AppTheme: Identifiable, Equatable {
         accent: Color(hex: "58A6FF"),
         border: Color(hex: "30363D"),
         success: Color(hex: "238636"),
-        error: Color(hex: "DA3633")
+        error: Color(hex: "DA3633"),
+        colorScheme: .dark
     )
     
     static let matrixTheme = AppTheme(
@@ -36,7 +38,8 @@ struct AppTheme: Identifiable, Equatable {
         accent: Color(hex: "00FF00"),
         border: Color(hex: "00FF00"),
         success: Color(hex: "00FF00"),
-        error: Color(hex: "FF0000")
+        error: Color(hex: "FF0000"),
+        colorScheme: .dark
     )
     
     static let oceanTheme = AppTheme(
@@ -49,7 +52,8 @@ struct AppTheme: Identifiable, Equatable {
         accent: Color(hex: "38BDF8"),
         border: Color(hex: "334155"),
         success: Color(hex: "22C55E"),
-        error: Color(hex: "EF4444")
+        error: Color(hex: "EF4444"),
+        colorScheme: .dark
     )
     
     static let sunsetTheme = AppTheme(
@@ -62,7 +66,8 @@ struct AppTheme: Identifiable, Equatable {
         accent: Color(hex: "F59E0B"),
         border: Color(hex: "7F1D1D"),
         success: Color(hex: "10B981"),
-        error: Color(hex: "EF4444")
+        error: Color(hex: "EF4444"),
+        colorScheme: .dark
     )
 
     static let natureTheme = AppTheme(
@@ -75,10 +80,25 @@ struct AppTheme: Identifiable, Equatable {
         accent: Color(hex: "34D399"),
         border: Color(hex: "065F46"),
         success: Color(hex: "34D399"),
-        error: Color(hex: "F87171")       
+        error: Color(hex: "F87171"),
+        colorScheme: .dark
     )
     
-    static let allThemes = [defaultTheme, matrixTheme, oceanTheme, sunsetTheme, natureTheme]
+    static let glacierTheme = AppTheme(
+        id: "glacier",
+        name: "Glacier",
+        background: Color(hex: "FFFFFF"),
+        surface: Color(hex: "F5F5F5"),
+        textPrimary: Color(hex: "1A1A1A"),
+        textSecondary: Color(hex: "666666"),
+        accent: Color(hex: "0EA5E9"),
+        border: Color(hex: "E5E5E5"),
+        success: Color(hex: "22C55E"),
+        error: Color(hex: "EF4444"),
+        colorScheme: .light
+    )
+    
+    static let allThemes = [defaultTheme, matrixTheme, oceanTheme, sunsetTheme, natureTheme, glacierTheme]
 }
 
 extension Color {

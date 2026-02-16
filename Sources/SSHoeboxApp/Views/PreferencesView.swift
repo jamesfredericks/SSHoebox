@@ -9,12 +9,16 @@ struct PreferencesView: View {
             Section {
                 Picker("Auto-lock after", selection: $autoLockTimeout) {
                     Text("5 minutes").tag(5)
+                        .foregroundColor(DesignSystem.Colors.textPrimary)
                     Text("15 minutes").tag(15)
+                        .foregroundColor(DesignSystem.Colors.textPrimary)
                     Text("30 minutes").tag(30)
+                        .foregroundColor(DesignSystem.Colors.textPrimary)
                     Text("1 hour").tag(60)
+                        .foregroundColor(DesignSystem.Colors.textPrimary)
                     Text("Never").tag(0)
+                        .foregroundColor(DesignSystem.Colors.textPrimary)
                 }
-                .foregroundStyle(DesignSystem.Colors.textPrimary)
                 .onChange(of: autoLockTimeout) { newValue in
                     UserDefaults.standard.set(newValue, forKey: "autoLockTimeout")
                     UserDefaults.standard.set(true, forKey: "hasSetAutoLockTimeout")
@@ -64,6 +68,8 @@ struct PreferencesView: View {
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
         .background(DesignSystem.Colors.background)
+        .preferredColorScheme(themeManager.currentTheme.colorScheme)
+        .tint(DesignSystem.Colors.accent)
         .navigationTitle("Preferences")
         .onAppear {
             // Load saved preference
