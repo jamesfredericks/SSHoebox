@@ -47,6 +47,37 @@ class CredentialsViewModel: ObservableObject {
         }
     }
     
+    func updateCredential(id: String, username: String, type: String, secret: String) {
+        guard let existingCredential = credentials.first(where: { $0.id == id }) else {
+            errorMessage = "Credential not found"
+            return
+        }
+        
+        guard let secretData = secret.data(using: .utf8) else { return }
+        
+        // Encrypt username
+        guard let encryptedUsername = try? CryptoManager.encryptString(username, using: vaultKey) else {
+            errorMessage = "Failed to encrypt username."
+            return
+        }
+        
+        do {
+            _ = try repository.updateCredential(
+                id: id,
+                hostId: hostId,
+                username: encryptedUsername,
+                type: type,
+                secret: secretData,
+                vaultKey: vaultKey,
+                createdAt: existingCredential.createdAt
+            )
+            fetchCredentials()
+        } catch {
+            errorMessage = "Failed to update credential: \(error.localizedDescription)"
+        }
+    }
+
+    
     func deleteCredential(at offsets: IndexSet) {
         offsets.forEach { index in
             let cred = credentials[index]

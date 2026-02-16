@@ -13,6 +13,7 @@ struct HostDetailView: View {
     @State private var showingAddCredential = false
     @State private var showingEditHost = false
     @State private var showingDeleteAlert = false
+    @State private var credentialToEdit: Credential? = nil
     @State private var copiedId: String? = nil
     
     init(host: SavedHost, dbManager: DatabaseManager, vaultKey: SymmetricKey) {
@@ -60,6 +61,9 @@ struct HostDetailView: View {
         }
         .sheet(isPresented: $showingEditHost) {
             EditHostSheet(viewModel: hostsViewModel, host: host, vaultKey: vaultKey)
+        }
+        .sheet(item: $credentialToEdit) { credential in
+            EditCredentialSheet(viewModel: viewModel, credential: credential, vaultKey: vaultKey)
         }
         .alert("Delete Host", isPresented: $showingDeleteAlert) {
             Button("Cancel", role: .cancel) { }
@@ -166,6 +170,12 @@ struct HostDetailView: View {
                         copyPassword(for: credential)
                     }
                     .contextMenu {
+                        Button {
+                            credentialToEdit = credential
+                        } label: {
+                            Label("Edit", systemImage: "pencil")
+                        }
+                        
                         Button(role: .destructive) {
                             viewModel.deleteCredential(credential: credential)
                         } label: {

@@ -35,6 +35,25 @@ public struct CredentialRepository {
         return credential
     }
     
+    /// Helper to update an existing credential
+    public func updateCredential(id: String, hostId: String, username: String, type: String, secret: Data, vaultKey: SymmetricKey, createdAt: Date) throws -> Credential {
+        let encrypted = try CryptoManager.encrypt(secret, using: vaultKey)
+        let credential = Credential(
+            id: id,
+            hostId: hostId,
+            username: username,
+            type: type,
+            encryptedBlob: encrypted,
+            createdAt: createdAt,
+            updatedAt: Date()
+        )
+        try dbManager.dbWriter.write { db in
+            try credential.update(db)
+        }
+        return credential
+    }
+
+    
     /// Helper to decrypt a credential's secret
     public func decryptSecret(for credential: Credential, vaultKey: SymmetricKey) throws -> Data {
         return try CryptoManager.decrypt(credential.encryptedBlob, using: vaultKey)
