@@ -28,15 +28,15 @@ public struct CredentialRepository {
     }
     
     /// Helper to create a credential by encrypting the secret
-    public func createCredential(hostId: String, username: String, type: String, secret: Data, vaultKey: SymmetricKey) throws -> Credential {
+    public func createCredential(hostId: String, username: String, type: String, secret: Data, vaultKey: SymmetricKey, isInteractive: Bool = false) throws -> Credential {
         let encrypted = try CryptoManager.encrypt(secret, using: vaultKey)
-        let credential = Credential(hostId: hostId, username: username, type: type, encryptedBlob: encrypted)
+        let credential = Credential(hostId: hostId, username: username, type: type, encryptedBlob: encrypted, isInteractive: isInteractive)
         try save(credential)
         return credential
     }
     
     /// Helper to update an existing credential
-    public func updateCredential(id: String, hostId: String, username: String, type: String, secret: Data, vaultKey: SymmetricKey, createdAt: Date) throws -> Credential {
+    public func updateCredential(id: String, hostId: String, username: String, type: String, secret: Data, vaultKey: SymmetricKey, isInteractive: Bool, createdAt: Date) throws -> Credential {
         let encrypted = try CryptoManager.encrypt(secret, using: vaultKey)
         let credential = Credential(
             id: id,
@@ -44,6 +44,7 @@ public struct CredentialRepository {
             username: username,
             type: type,
             encryptedBlob: encrypted,
+            isInteractive: isInteractive,
             createdAt: createdAt,
             updatedAt: Date()
         )

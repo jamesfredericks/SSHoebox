@@ -7,6 +7,7 @@ struct AddCredentialSheet: View {
     @State private var username = ""
     @State private var type = "password"
     @State private var secret = ""
+    @State private var isInteractive = false
     
     var body: some View {
         NavigationStack {
@@ -31,6 +32,11 @@ struct AddCredentialSheet: View {
                             .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.gray.opacity(0.4)))
                     }
                 }
+                
+                Section {
+                    Toggle("Interactive authentication (YubiKey, hardware tokens)", isOn: $isInteractive)
+                        .help("Enable for YubiKey or other hardware token authentication that requires manual interaction")
+                }
             }
             .formStyle(.grouped)
             .navigationTitle("New Credential")
@@ -41,7 +47,7 @@ struct AddCredentialSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         if !username.isEmpty, !secret.isEmpty {
-                            viewModel.addCredential(username: username, type: type, secret: secret)
+                            viewModel.addCredential(username: username, type: type, secret: secret, isInteractive: isInteractive)
                             dismiss()
                         }
                     }

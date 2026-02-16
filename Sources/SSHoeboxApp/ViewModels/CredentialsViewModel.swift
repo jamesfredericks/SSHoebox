@@ -30,7 +30,7 @@ class CredentialsViewModel: ObservableObject {
         }
     }
     
-    func addCredential(username: String, type: String, secret: String) {
+    func addCredential(username: String, type: String, secret: String, isInteractive: Bool = false) {
         guard let secretData = secret.data(using: .utf8) else { return }
         
         // Encrypt username
@@ -40,14 +40,14 @@ class CredentialsViewModel: ObservableObject {
         }
         
         do {
-            _ = try repository.createCredential(hostId: hostId, username: encryptedUsername, type: type, secret: secretData, vaultKey: vaultKey)
+            _ = try repository.createCredential(hostId: hostId, username: encryptedUsername, type: type, secret: secretData, vaultKey: vaultKey, isInteractive: isInteractive)
             fetchCredentials()
         } catch {
             errorMessage = "Failed to add credential: \(error.localizedDescription)"
         }
     }
     
-    func updateCredential(id: String, username: String, type: String, secret: String) {
+    func updateCredential(id: String, username: String, type: String, secret: String, isInteractive: Bool) {
         guard let existingCredential = credentials.first(where: { $0.id == id }) else {
             errorMessage = "Credential not found"
             return
@@ -69,6 +69,7 @@ class CredentialsViewModel: ObservableObject {
                 type: type,
                 secret: secretData,
                 vaultKey: vaultKey,
+                isInteractive: isInteractive,
                 createdAt: existingCredential.createdAt
             )
             fetchCredentials()

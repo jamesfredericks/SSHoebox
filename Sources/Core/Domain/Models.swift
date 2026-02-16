@@ -44,6 +44,7 @@ public struct Credential: Codable, FetchableRecord, PersistableRecord, Identifia
     public var username: String
     public var type: String // "password", "key"
     public var encryptedBlob: Data // Encrypted JSON or raw bytes
+    public var isInteractive: Bool // For YubiKey, hardware tokens, etc.
     public var createdAt: Date
     public var updatedAt: Date
     
@@ -52,6 +53,7 @@ public struct Credential: Codable, FetchableRecord, PersistableRecord, Identifia
                 username: String,
                 type: String,
                 encryptedBlob: Data,
+                isInteractive: Bool = false,
                 createdAt: Date = Date(),
                 updatedAt: Date = Date()) {
         self.id = id
@@ -59,6 +61,7 @@ public struct Credential: Codable, FetchableRecord, PersistableRecord, Identifia
         self.username = username
         self.type = type
         self.encryptedBlob = encryptedBlob
+        self.isInteractive = isInteractive
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }

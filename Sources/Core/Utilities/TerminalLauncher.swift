@@ -2,7 +2,7 @@ import Foundation
 import AppKit
 
 public struct TerminalLauncher {
-    public static func openInTerminal(command: String, password: String? = nil) async {
+    public static func openInTerminal(command: String, password: String? = nil, isInteractive: Bool = false) async {
         // Simple input sanitization to prevent command injection
         let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ._-@:/")
         guard command.unicodeScalars.allSatisfy({ allowed.contains($0) }) else {
@@ -14,9 +14,19 @@ public struct TerminalLauncher {
         Task.detached(priority: .userInitiated) {
             var scriptContent = ""
             
-            if let password = password {
+            // If interactive mode OR no password, use plain shell script
+            if isInteractive || password == nil {
+                scriptContent = """
+                #!/bin/sh
+                echo "Starting session..."
+                \(command)
+                echo "\\n[Session finished. Close this window to exit.]"
+                # read
+                """
+            } else {
+                // Use expect script for password automation
                 // Escape special characters in password for Tcl/Expect
-                let escapedPassword = password
+                let escapedPassword = password!
                     .replacingOccurrences(of: "\\", with: "\\\\")
                     .replacingOccurrences(of: "\"", with: "\\\"")
                     .replacingOccurrences(of: "[", with: "\\[")
@@ -45,14 +55,6 @@ public struct TerminalLauncher {
                 
                 # Hand over control to the user
                 interact
-                """
-            } else {
-                scriptContent = """
-                #!/bin/sh
-                echo "Starting session..."
-                \(command)
-                echo "\\n[Session finished. Close this window to exit.]"
-                # read
                 """
             }
             

@@ -199,11 +199,13 @@ struct HostDetailView: View {
             
             // Find a password credential - prefer 'password' type
             var password: String? = nil
+            var isInteractive = false
             if let cred = viewModel.credentials.first(where: { $0.type == "password" }) {
                 password = viewModel.decrypt(credential: cred)
+                isInteractive = cred.isInteractive
             }
             
-            await TerminalLauncher.openInTerminal(command: cmd, password: password)
+            await TerminalLauncher.openInTerminal(command: cmd, password: password, isInteractive: isInteractive)
         }
     }
 

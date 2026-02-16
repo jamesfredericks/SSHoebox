@@ -45,6 +45,13 @@ public struct DatabaseManager {
             }
         }
         
+        migrator.registerMigration("v2") { db in
+            try db.alter(table: "credential") { t in
+                t.add(column: "isInteractive", .boolean).notNull().defaults(to: false)
+            }
+        }
+
+        
         return migrator
     }
 }

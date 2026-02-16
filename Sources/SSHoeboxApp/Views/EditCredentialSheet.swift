@@ -11,6 +11,7 @@ struct EditCredentialSheet: View {
     @State private var username: String
     @State private var type: String
     @State private var secret: String
+    @State private var isInteractive: Bool
     
     init(viewModel: CredentialsViewModel, credential: Credential, vaultKey: SymmetricKey) {
         self.viewModel = viewModel
@@ -24,6 +25,7 @@ struct EditCredentialSheet: View {
         // Decrypt secret
         let decryptedSecret = viewModel.decrypt(credential: credential) ?? ""
         _secret = State(initialValue: decryptedSecret)
+        _isInteractive = State(initialValue: credential.isInteractive)
     }
     
     var body: some View {
@@ -49,6 +51,11 @@ struct EditCredentialSheet: View {
                             .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.gray.opacity(0.4)))
                     }
                 }
+                
+                Section {
+                    Toggle("Interactive authentication (YubiKey, hardware tokens)", isOn: $isInteractive)
+                        .help("Enable for YubiKey or other hardware token authentication that requires manual interaction")
+                }
             }
             .formStyle(.grouped)
             .navigationTitle("Edit Credential")
@@ -63,7 +70,8 @@ struct EditCredentialSheet: View {
                                 id: credential.id,
                                 username: username,
                                 type: type,
-                                secret: secret
+                                secret: secret,
+                                isInteractive: isInteractive
                             )
                             dismiss()
                         }
