@@ -3,7 +3,7 @@
 # Configuration
 APP_NAME="SSHoebox"
 BUNDLE_ID="com.sshoebox.app"
-VERSION="1.3.0"
+VERSION="1.4.0"
 BUILD_DIR=".build/release"
 DIST_DIR="dist"
 APP_BUNDLE="${DIST_DIR}/${APP_NAME}.app"
@@ -76,7 +76,7 @@ cat > "${APP_BUNDLE}/Contents/Info.plist" <<PLIST
     <key>CFBundleShortVersionString</key>
     <string>${VERSION}</string>
     <key>CFBundleVersion</key>
-    <string>4</string>
+    <string>5</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>
