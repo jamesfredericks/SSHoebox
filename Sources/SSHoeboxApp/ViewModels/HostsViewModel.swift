@@ -62,6 +62,42 @@ class HostsViewModel: ObservableObject {
         }
     }
     
+    func updateHost(id: String, name: String, hostname: String, port: Int, protocolType: String, user: String) {
+        // Find existing host
+        guard let existingHost = hosts.first(where: { $0.id == id }) else {
+            errorMessage = "Host not found"
+            return
+        }
+        
+        // Encrypt new metadata
+        guard let encryptedName = try? CryptoManager.encryptString(name, using: vaultKey),
+              let encryptedHostname = try? CryptoManager.encryptString(hostname, using: vaultKey),
+              let encryptedUser = try? CryptoManager.encryptString(user, using: vaultKey) else {
+            errorMessage = "Failed to encrypt host data."
+            return
+        }
+        
+        // Create updated host with same ID
+        let updatedHost = SavedHost(
+            id: id,
+            name: encryptedName,
+            hostname: encryptedHostname,
+            port: port,
+            protocolType: protocolType,
+            user: encryptedUser,
+            createdAt: existingHost.createdAt,
+            updatedAt: Date()
+        )
+        
+        do {
+            try repository.save(updatedHost)
+            fetchHosts()
+        } catch {
+            errorMessage = "Failed to update host: \(error.localizedDescription)"
+        }
+    }
+
+    
     func deleteHost(at offsets: IndexSet) {
         offsets.forEach { index in
             let host = hosts[index]

@@ -25,6 +25,15 @@ struct HostListView: View {
                         HostCard(host: host, vaultKey: vaultKey)
                     }
                     .buttonStyle(.plain) // Remove default button/link styling
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button(role: .destructive) {
+                            if let index = viewModel.hosts.firstIndex(where: { $0.id == host.id }) {
+                                viewModel.deleteHost(at: IndexSet(integer: index))
+                            }
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
                 }
             }
             .padding(DesignSystem.Spacing.large)

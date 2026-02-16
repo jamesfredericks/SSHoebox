@@ -4,16 +4,23 @@ import CryptoKit
 
 struct HostDetailView: View {
     @ObservedObject private var themeManager = ThemeManager.shared
+    @Environment(\.dismiss) var dismiss
     let host: SavedHost
+    let dbManager: DatabaseManager
     let vaultKey: SymmetricKey
     @StateObject private var viewModel: CredentialsViewModel
+    @StateObject private var hostsViewModel: HostsViewModel
     @State private var showingAddCredential = false
+    @State private var showingEditHost = false
+    @State private var showingDeleteAlert = false
     @State private var copiedId: String? = nil
     
     init(host: SavedHost, dbManager: DatabaseManager, vaultKey: SymmetricKey) {
         self.host = host
+        self.dbManager = dbManager
         self.vaultKey = vaultKey
         _viewModel = StateObject(wrappedValue: CredentialsViewModel(dbManager: dbManager, vaultKey: vaultKey, hostId: host.id))
+        _hostsViewModel = StateObject(wrappedValue: HostsViewModel(dbManager: dbManager, vaultKey: vaultKey))
     }
     
     var body: some View {
@@ -31,9 +38,39 @@ struct HostDetailView: View {
                     Image(systemName: "play.fill")
                 }
             }
+            
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    showingEditHost = true
+                } label: {
+                    Label("Edit", systemImage: "pencil")
+                }
+            }
+            
+            ToolbarItem(placement: .automatic) {
+                Button(role: .destructive) {
+                    showingDeleteAlert = true
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            }
         }
         .sheet(isPresented: $showingAddCredential) {
             AddCredentialSheet(viewModel: viewModel)
+        }
+        .sheet(isPresented: $showingEditHost) {
+            EditHostSheet(viewModel: hostsViewModel, host: host, vaultKey: vaultKey)
+        }
+        .alert("Delete Host", isPresented: $showingDeleteAlert) {
+            Button("Cancel", role: .cancel) { }
+            Button("Delete", role: .destructive) {
+                if let index = hostsViewModel.hosts.firstIndex(where: { $0.id == host.id }) {
+                    hostsViewModel.deleteHost(at: IndexSet(integer: index))
+                    dismiss()
+                }
+            }
+        } message: {
+            Text("Are you sure you want to delete '\(host.decryptedName(using: vaultKey))'? This action cannot be undone.")
         }
     }
     
