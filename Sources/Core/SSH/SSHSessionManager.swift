@@ -18,8 +18,6 @@ public class SSHSessionManager: ObservableObject {
     
     @Published public var connectionState: ConnectionState = .disconnected
     
-    /// Called when the SSH server sends output data (to be rendered by the terminal view).
-    public var onOutput: ((Data) -> Void)?
     /// Called when the session ends (disconnect or error).
     public var onDisconnect: (() -> Void)?
     
@@ -28,6 +26,22 @@ public class SSHSessionManager: ObservableObject {
     
     // Stdin pipe: we write to this continuation to send data to the SSH channel
     private var stdinContinuation: AsyncStream<Data>.Continuation?
+    
+    // We need to keep a reference to the channel handler or channel to write stdin
+    private var stdinWriter: TTYStdinWriter?
+    private var logBuffer: [Data] = []
+    private var currentTerminalSize: (cols: Int, rows: Int) = (80, 24)
+    
+    public var onOutput: ((Data) -> Void)? {
+        didSet {
+            if let onOutput = onOutput, !logBuffer.isEmpty {
+                for logData in logBuffer {
+                    onOutput(logData)
+                }
+                logBuffer.removeAll()
+            }
+        }
+    }
     
     public init() {}
     
@@ -76,6 +90,7 @@ public class SSHSessionManager: ObservableObject {
         terminalSize: (cols: Int, rows: Int) = (80, 24)
     ) async {
         let delegate = KeyboardInteractiveDelegate(username: username)
+        delegate.onOutput = self.onOutput
         let settings = SSHClientSettings(
             host: host,
             port: port,
@@ -85,13 +100,23 @@ public class SSHSessionManager: ObservableObject {
         await startSession(settings: settings, terminalSize: terminalSize)
     }
     
+    public func log(_ msg: String, color: String = "36") {
+        let text = "\r\n\u{1B}[\(color)m\(msg)\u{1B}[0m\r\n"
+        let data = Data(text.utf8)
+        if let onOutput = onOutput {
+            onOutput(data)
+        } else {
+            logBuffer.append(data)
+        }
+    }
+    
     // MARK: - Internal Session
     
     private func startSession(
         settings: SSHClientSettings,
         terminalSize: (cols: Int, rows: Int)
     ) async {
-        connectionState = .connecting
+        await MainActor.run { connectionState = .connecting }
         
         // Create stdin stream
         let (stdinStream, stdinContinuation) = AsyncStream<Data>.makeStream()
@@ -100,28 +125,46 @@ public class SSHSessionManager: ObservableObject {
         sessionTask = Task { [weak self] in
             guard let self else { return }
             do {
+                await MainActor.run { self.log("Connecting to \(settings.host):\(settings.port)...") }
                 let sshClient = try await SSHClient.connect(to: settings)
-                await MainActor.run { self.client = sshClient }
+                await MainActor.run { 
+                    self.client = sshClient
+                    self.log("TCP Connected & Authenticated.", color: "32")
+                }
                 
-                // Open an interactive shell session using TTY
-                // Note: withTTY creates a shell request with no command, avoiding the ";exit" issue
-                try await sshClient.withTTY { inbound, outbound in
-                    await MainActor.run { self.connectionState = .connected }
+                await MainActor.run { self.currentTerminalSize = terminalSize }
+                
+                // Open an interactive shell session using PTY
+                let ptyRequest = SSHChannelRequestEvent.PseudoTerminalRequest(
+                    wantReply: true,
+                    term: "xterm-256color",
+                    terminalCharacterWidth: terminalSize.cols,
+                    terminalRowHeight: terminalSize.rows,
+                    terminalPixelWidth: 0,
+                    terminalPixelHeight: 0,
+                    terminalModes: .init([:])
+                )
+                
+                
+                try await sshClient.withPTY(ptyRequest) { inbound, outbound in
+                    await MainActor.run { 
+                        self.log("PTY Granted. Starting Shell...", color: "32")
+                        self.stdinWriter = outbound
+                        self.connectionState = .connected 
+                    }
                     
                     // Handle Stdin
                     let stdinTask = Task {
                         for await data in stdinStream {
-                            var buffer = ByteBuffer(data: data)
+                            let buffer = ByteBuffer(data: data)
                             try await outbound.write(buffer)
                         }
                     }
                     
-                    // Handle Output and Resize
-                    // We need to capture outbound to support resize
-                    // But we can't easily exfiltrate it from this scope.
-                    // For now, resize is TODO or needs refactoring.
-                    
-                    for await output in inbound {
+                    // Handle Output
+                    var chunkCount = 0
+                    for try await output in inbound {
+                        chunkCount += 1
                         switch output {
                         case .stdout(let buffer):
                             let data = Data(buffer.readableBytesView)
@@ -132,16 +175,21 @@ public class SSHSessionManager: ObservableObject {
                         }
                     }
                     
+                    
                     stdinTask.cancel()
                     
                     await MainActor.run {
+                        self.stdinWriter = nil
                         self.connectionState = .disconnected
                         self.onDisconnect?()
                     }
                 }
                 
+                
             } catch {
                 await MainActor.run {
+                    let errorMsg = "ERROR: \(error.localizedDescription)"
+                    self.log(errorMsg, color: "31")
                     self.connectionState = .failed(error.localizedDescription)
                     self.onDisconnect?()
                 }
@@ -166,8 +214,12 @@ public class SSHSessionManager: ObservableObject {
     
     /// Notify the SSH server of a terminal resize.
     public func resize(cols: Int, rows: Int) {
-        // PTY resize notification — sent via channel outbound event
-        // Stored for reconnection purposes
+        currentTerminalSize = (cols, rows)
+        
+        guard let writer = stdinWriter else { return }
+        Task {
+            try? await writer.changeSize(cols: cols, rows: rows, pixelWidth: 0, pixelHeight: 0)
+        }
     }
     
     // MARK: - Disconnect
@@ -204,11 +256,19 @@ final class KeyboardInteractiveDelegate: NIOSSHClientUserAuthenticationDelegate,
         if availableMethods.contains(.password) || availableMethods.contains(.publicKey) {
             nextChallengePromise.succeed(NIOSSHUserAuthenticationOffer(
                 username: username,
-                serviceName: "",
+                serviceName: "ssh-connection",
                 offer: .none
             ))
         } else {
             nextChallengePromise.fail(CitadelError.unsupported)
         }
     }
+    
+    private func log(_ msg: String) {
+        let text = "\r\n\u{1B}[35m\(msg)\u{1B}[0m\r\n"
+        onOutput?(Data(text.utf8))
+    }
+    
+    var onOutput: ((Data) -> Void)?
 }
+

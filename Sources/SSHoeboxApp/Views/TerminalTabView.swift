@@ -167,23 +167,32 @@ struct TerminalTabView: View {
     
     private func connectSession(manager: SSHSessionManager) async {
         let hostname = host.decryptedHostname(using: vaultKey)
-        let user = host.decryptedUser(using: vaultKey)
-        let port = host.port ?? 22
+        let defaultUser = host.decryptedUser(using: vaultKey)
+        let port = host.port
         
         // Find password credential
         if let cred = viewModel.credentials.first(where: { $0.type == "password" }) {
-            if cred.isInteractive {
-                // YubiKey / hardware token — interactive mode
-                await manager.connectInteractive(host: hostname, port: port, username: user)
-            } else if let password = viewModel.decrypt(credential: cred) {
-                await manager.connect(host: hostname, port: port, username: user, password: password)
+            let decryptedCredUser = cred.decryptedUsername(using: vaultKey)
+            let username = decryptedCredUser.isEmpty ? defaultUser : decryptedCredUser
+            
+            if let password = viewModel.decrypt(credential: cred) {
+                // We use standard password auth for stability (avoids failing interactive fallback)
+                await manager.connect(host: hostname, port: port, username: username, password: password)
+            } else {
+                manager.log("ERROR: Decryption failed for password.", color: "31")
+                await manager.connectInteractive(host: hostname, port: port, username: username)
             }
+        } else if let cred = viewModel.credentials.first(where: { $0.type == "key" }) {
+             let decryptedCredUser = cred.decryptedUsername(using: vaultKey)
+             let username = decryptedCredUser.isEmpty ? defaultUser : decryptedCredUser
+             await manager.connectInteractive(host: hostname, port: port, username: username)
         } else {
-            // No password credential — try interactive
-            await manager.connectInteractive(host: hostname, port: port, username: user)
+            // No saved credentials — fallback to interactive with host default user
+            await manager.connectInteractive(host: hostname, port: port, username: defaultUser)
         }
     }
     
+    @MainActor
     private func closeSession(_ session: TerminalSession) {
         session.manager.disconnect()
         sessions.removeAll { $0.id == session.id }
