@@ -27,6 +27,12 @@ public struct CredentialRepository {
         }
     }
     
+    public func getAll() throws -> [Credential] {
+        try dbManager.reader.read { db in
+            try Credential.fetchAll(db)
+        }
+    }
+    
     /// Helper to create a credential by encrypting the secret
     public func createCredential(hostId: String, username: String, type: String, secret: Data, vaultKey: SymmetricKey, isInteractive: Bool = false) throws -> Credential {
         let encrypted = try CryptoManager.encrypt(secret, using: vaultKey)

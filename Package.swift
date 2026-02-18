@@ -19,7 +19,7 @@ let package = Package(
         // Terminal emulator UI
         .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.2.0"),
         // SSH protocol client
-        .package(url: "https://github.com/orlandos-nl/Citadel.git", from: "0.8.0"),
+        .package(url: "https://github.com/orlandos-nl/Citadel.git", from: "0.9.0"),
     ],
     targets: [
         .target(

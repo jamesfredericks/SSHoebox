@@ -33,7 +33,7 @@ class VaultViewModel: ObservableObject {
     var biometricSymbolName: String { BiometricAuthManager.biometricSymbolName() }
     
     var dbManager: DatabaseManager?
-    private var vaultKey: SymmetricKey?
+    var vaultKey: SymmetricKey?
     private var idleMonitor: IdleMonitor?
     private var cancellables = Set<AnyCancellable>()
     
