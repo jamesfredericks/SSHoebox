@@ -2,6 +2,7 @@ import SwiftUI
 import SSHoeboxCore
 
 struct PreferencesView: View {
+    @ObservedObject var viewModel: VaultViewModel
     @ObservedObject var themeManager = ThemeManager.shared
     @State private var autoLockTimeout: Int = 15
     @State private var isBiometricEnabled: Bool = BiometricAuthManager.isBiometricEnrolled
@@ -56,6 +57,52 @@ struct PreferencesView: View {
                          : "Enable \(BiometricAuthManager.biometricTypeName()) to unlock your vault without typing your master password.")
                         .foregroundStyle(DesignSystem.Colors.textSecondary)
                 }
+            }
+            
+            // SSH Agent Section
+            Section {
+                Toggle("Enable SSH Agent", isOn: $viewModel.isAgentEnabled)
+                
+                if viewModel.isAgentEnabled {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Socket Path")
+                            .font(.caption)
+                            .foregroundStyle(DesignSystem.Colors.textSecondary)
+                        
+                        HStack {
+                            Text(viewModel.agentSocketPath ?? "Unavailable")
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(DesignSystem.Colors.textPrimary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .textSelection(.enabled)
+                            
+                            Spacer()
+                            
+                            Button {
+                                if let path = viewModel.agentSocketPath {
+                                    NSPasteboard.general.clearContents()
+                                    NSPasteboard.general.setString(path, forType: .string)
+                                }
+                            } label: {
+                                Image(systemName: "doc.on.doc")
+                                    .font(.caption)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(8)
+                        .background(DesignSystem.Colors.surface)
+                        .cornerRadius(6)
+                        
+                        Text("Use this socket path for SSH_AUTH_SOCK to access keys in other apps.")
+                            .font(.caption)
+                            .foregroundStyle(DesignSystem.Colors.textSecondary)
+                    }
+                    .padding(.vertical, 4)
+                }
+            } header: {
+                Text("SSH Agent")
+                    .foregroundStyle(DesignSystem.Colors.textSecondary)
             }
             
             Section {

@@ -76,7 +76,7 @@ struct MainView: View {
                         BackupView(dbManager: db)
                     }
                 case .preferences:
-                    PreferencesView()
+                    PreferencesView(viewModel: viewModel)
                 case .none:
                     Text("Select an item")
                         .foregroundStyle(DesignSystem.Colors.textSecondary)

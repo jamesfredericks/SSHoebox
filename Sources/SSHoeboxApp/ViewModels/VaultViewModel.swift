@@ -4,6 +4,8 @@ import Combine
 import SSHoeboxCore
 import CryptoKit
 import LocalAuthentication
+import NIOSSH
+
 
 @MainActor
 class VaultViewModel: ObservableObject {
@@ -11,6 +13,19 @@ class VaultViewModel: ObservableObject {
     @Published var isNewUser: Bool = false
     @Published var errorMessage: String?
     @Published var showBiometricSetupPrompt: Bool = false
+    
+    // SSH Agent
+    @Published var isAgentEnabled: Bool = UserDefaults.standard.bool(forKey: "isAgentEnabled") {
+        didSet {
+            UserDefaults.standard.set(isAgentEnabled, forKey: "isAgentEnabled")
+            if isAgentEnabled && isUnlocked {
+                startAgent()
+            } else if !isAgentEnabled {
+                stopAgent()
+            }
+        }
+    }
+    private var agentServer: SSHAgentServer?
     
     var isBiometricAvailable: Bool { BiometricAuthManager.isBiometricAvailable() }
     var isBiometricEnrolled: Bool { BiometricAuthManager.isBiometricEnrolled }
@@ -116,7 +131,13 @@ class VaultViewModel: ObservableObject {
             }
             
             // Start auto-lock monitoring
+            // Start auto-lock monitoring
             startAutoLockMonitoring()
+            
+            // Start agent if enabled
+            if isAgentEnabled {
+                startAgent()
+            }
             
         } catch {
             self.errorMessage = "Unlock failed: \(error.localizedDescription)"
@@ -145,6 +166,11 @@ class VaultViewModel: ObservableObject {
                 self.isUnlocked = true
                 self.errorMessage = nil
                 startAutoLockMonitoring()
+                
+                // Start agent if enabled
+                if self.isAgentEnabled {
+                    self.startAgent()
+                }
                 
             } catch {
                 self.errorMessage = "Biometric unlock failed: \(error.localizedDescription)"
@@ -197,6 +223,9 @@ class VaultViewModel: ObservableObject {
         
         // Stop auto-lock monitoring
         stopAutoLockMonitoring()
+        
+        // Stop agent
+        stopAgent()
     }
     
     // MARK: - Auto-Lock
@@ -270,6 +299,43 @@ class VaultViewModel: ObservableObject {
         self.lock()
         self.checkIfVaultExists()
         self.errorMessage = nil
+    }
+    
+    // MARK: - SSH Agent Management
+    
+    func startAgent() {
+        guard isAgentEnabled, let socketPath = agentSocketPath else { return }
+        print("Starting SSH Agent at \(socketPath)")
+        
+        // Ensure only one instance
+        stopAgent()
+        
+        agentServer = SSHAgentServer(socketPath: socketPath, delegate: self)
+        Task {
+            do {
+                try await agentServer?.start()
+            } catch {
+                await MainActor.run {
+                    self.errorMessage = "Failed to start SSH Agent: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+    
+    func stopAgent() {
+        if let server = agentServer {
+            Task {
+                try? await server.stop()
+            }
+            agentServer = nil
+        }
+    }
+    
+    var agentSocketPath: String? {
+        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
+        let appDir = appSupport.appendingPathComponent("com.sshoebox.app")
+        try? FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)
+        return appDir.appendingPathComponent("agent.sock").path
     }
 }
 
