@@ -54,17 +54,18 @@ public class SSHSessionManager: ObservableObject {
         password: String,
         terminalSize: (cols: Int, rows: Int) = (80, 24)
     ) async {
-        let settings = SSHClientSettings(
+        var settings = SSHClientSettings(
             host: host,
             port: port,
             authenticationMethod: { .passwordBased(username: username, password: password) },
             hostKeyValidator: .acceptAnything()
         )
+        settings.algorithms = .all
         await startSession(settings: settings, terminalSize: terminalSize)
     }
-    
+
     // MARK: - Connect (Ed25519 Key)
-    
+
     public func connect(
         host: String,
         port: Int = 22,
@@ -72,17 +73,18 @@ public class SSHSessionManager: ObservableObject {
         ed25519Key: Curve25519.Signing.PrivateKey,
         terminalSize: (cols: Int, rows: Int) = (80, 24)
     ) async {
-        let settings = SSHClientSettings(
+        var settings = SSHClientSettings(
             host: host,
             port: port,
             authenticationMethod: { .ed25519(username: username, privateKey: ed25519Key) },
             hostKeyValidator: .acceptAnything()
         )
+        settings.algorithms = .all
         await startSession(settings: settings, terminalSize: terminalSize)
     }
-    
+
     // MARK: - Connect (Interactive / YubiKey)
-    
+
     public func connectInteractive(
         host: String,
         port: Int = 22,
@@ -91,12 +93,13 @@ public class SSHSessionManager: ObservableObject {
     ) async {
         let delegate = KeyboardInteractiveDelegate(username: username)
         delegate.onOutput = self.onOutput
-        let settings = SSHClientSettings(
+        var settings = SSHClientSettings(
             host: host,
             port: port,
             authenticationMethod: { .custom(delegate) },
             hostKeyValidator: .acceptAnything()
         )
+        settings.algorithms = .all
         await startSession(settings: settings, terminalSize: terminalSize)
     }
     
@@ -188,9 +191,10 @@ public class SSHSessionManager: ObservableObject {
                 
             } catch {
                 await MainActor.run {
-                    let errorMsg = "ERROR: \(error.localizedDescription)"
-                    self.log(errorMsg, color: "31")
-                    self.connectionState = .failed(error.localizedDescription)
+                    let detailedError = String(describing: error)
+                    let errorType = String(describing: type(of: error))
+                    self.log("ERROR [\(errorType)]: \(detailedError)", color: "31")
+                    self.connectionState = .failed(detailedError)
                     self.onDisconnect?()
                 }
             }

@@ -92,7 +92,8 @@ public struct SSHAlgorithms: Sendable {
         var algorithms = SSHAlgorithms()
 
         algorithms.transportProtectionSchemes = .add([
-            AES128CTR.self
+            AES128CTR.self,
+            ETMMACCompatScheme.self,
         ])
 
         algorithms.keyExchangeAlgorithms = .add([
