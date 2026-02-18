@@ -1,8 +1,10 @@
 import SwiftUI
+import SSHoeboxCore
 
 struct PreferencesView: View {
     @ObservedObject var themeManager = ThemeManager.shared
     @State private var autoLockTimeout: Int = 15
+    @State private var isBiometricEnabled: Bool = BiometricAuthManager.isBiometricEnrolled
     
     var body: some View {
         Form {
@@ -29,6 +31,31 @@ struct PreferencesView: View {
             } footer: {
                 Text("Automatically lock the vault after a period of inactivity.")
                     .foregroundStyle(DesignSystem.Colors.textSecondary)
+            }
+            
+            // Biometric unlock section — only shown if available
+            if BiometricAuthManager.isBiometricAvailable() {
+                Section {
+                    Toggle(isOn: $isBiometricEnabled) {
+                        Label("Unlock with \(BiometricAuthManager.biometricTypeName())",
+                              systemImage: BiometricAuthManager.biometricSymbolName())
+                            .foregroundStyle(DesignSystem.Colors.textPrimary)
+                    }
+                    .onChange(of: isBiometricEnabled) { enabled in
+                        if !enabled {
+                            BiometricAuthManager.revokeBiometric()
+                        }
+                        // Note: enabling requires the vault to be unlocked (done via setup prompt)
+                    }
+                } header: {
+                    Text("Biometric Unlock")
+                        .foregroundStyle(DesignSystem.Colors.textSecondary)
+                } footer: {
+                    Text(isBiometricEnabled
+                         ? "\(BiometricAuthManager.biometricTypeName()) is enabled. Disable to require your master password each time."
+                         : "Enable \(BiometricAuthManager.biometricTypeName()) to unlock your vault without typing your master password.")
+                        .foregroundStyle(DesignSystem.Colors.textSecondary)
+                }
             }
             
             Section {

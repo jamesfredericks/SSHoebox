@@ -3,12 +3,19 @@ import SwiftUI
 import Combine
 import SSHoeboxCore
 import CryptoKit
+import LocalAuthentication
 
 @MainActor
 class VaultViewModel: ObservableObject {
     @Published var isUnlocked: Bool = false
     @Published var isNewUser: Bool = false
     @Published var errorMessage: String?
+    @Published var showBiometricSetupPrompt: Bool = false
+    
+    var isBiometricAvailable: Bool { BiometricAuthManager.isBiometricAvailable() }
+    var isBiometricEnrolled: Bool { BiometricAuthManager.isBiometricEnrolled }
+    var biometricTypeName: String { BiometricAuthManager.biometricTypeName() }
+    var biometricSymbolName: String { BiometricAuthManager.biometricSymbolName() }
     
     var dbManager: DatabaseManager?
     private var vaultKey: SymmetricKey?
@@ -103,12 +110,62 @@ class VaultViewModel: ObservableObject {
             self.isUnlocked = true
             self.errorMessage = nil
             
+            // Prompt biometric enrollment if available and not yet enrolled
+            if BiometricAuthManager.isBiometricAvailable() && !BiometricAuthManager.isBiometricEnrolled {
+                self.showBiometricSetupPrompt = true
+            }
+            
             // Start auto-lock monitoring
             startAutoLockMonitoring()
             
         } catch {
             self.errorMessage = "Unlock failed: \(error.localizedDescription)"
         }
+    }
+    
+    /// Unlock the vault using Touch ID / Face ID.
+    func unlockWithBiometrics() {
+        Task {
+            do {
+                let key = try await BiometricAuthManager.unlockWithBiometrics()
+                
+                // Validate the key against the stored validation token
+                let metadataData = try KeychainManager.read(account: "vault_metadata")
+                let metadata = try JSONDecoder().decode(VaultMetadata.self, from: metadataData)
+                let decryptedValidation = try CryptoManager.decrypt(metadata.validation, using: key)
+                guard let validationString = String(data: decryptedValidation, encoding: .utf8),
+                      validationString == "SSHOEBOX_VALID" else {
+                    self.errorMessage = "Biometric unlock failed: key mismatch."
+                    return
+                }
+                
+                let manager = try DatabaseManager(path: dbPath)
+                self.dbManager = manager
+                self.vaultKey = key
+                self.isUnlocked = true
+                self.errorMessage = nil
+                startAutoLockMonitoring()
+                
+            } catch {
+                self.errorMessage = "Biometric unlock failed: \(error.localizedDescription)"
+            }
+        }
+    }
+    
+    /// Enroll biometrics using the currently unlocked vault key.
+    func enrollBiometrics() {
+        guard let key = vaultKey else { return }
+        do {
+            try BiometricAuthManager.enrollBiometric(vaultKey: key)
+            self.showBiometricSetupPrompt = false
+        } catch {
+            self.errorMessage = "Failed to enable biometric unlock: \(error.localizedDescription)"
+        }
+    }
+    
+    /// Disable biometric unlock and remove the stored key.
+    func disableBiometrics() {
+        BiometricAuthManager.revokeBiometric()
     }
     
     private func performMetadataEncryption(db: DatabaseManager, key: SymmetricKey) throws {
