@@ -9,7 +9,8 @@ public class IdleMonitor: ObservableObject {
     
     private var lastActivityTime: Date = Date()
     private var timer: Timer?
-    private var eventMonitor: Any?
+    private var globalEventMonitor: Any?
+    private var localEventMonitor: Any?
     public var timeoutInterval: TimeInterval
     
     public init(timeoutInterval: TimeInterval) {
@@ -21,14 +22,14 @@ public class IdleMonitor: ObservableObject {
         lastActivityTime = Date()
         
         // Monitor global events (mouse and keyboard)
-        eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] _ in
+        globalEventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] _ in
             Task { @MainActor in
                 self?.resetActivity()
             }
         }
-        
+
         // Also monitor local events (within the app)
-        NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
+        localEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
             Task { @MainActor in
                 self?.resetActivity()
             }
@@ -45,9 +46,13 @@ public class IdleMonitor: ObservableObject {
     
     /// Stop monitoring
     public func stopMonitoring() {
-        if let monitor = eventMonitor {
+        if let monitor = globalEventMonitor {
             NSEvent.removeMonitor(monitor)
-            eventMonitor = nil
+            globalEventMonitor = nil
+        }
+        if let monitor = localEventMonitor {
+            NSEvent.removeMonitor(monitor)
+            localEventMonitor = nil
         }
         timer?.invalidate()
         timer = nil

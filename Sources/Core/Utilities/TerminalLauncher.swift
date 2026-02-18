@@ -30,7 +30,11 @@ public struct TerminalLauncher {
                     .replacingOccurrences(of: "\\", with: "\\\\")
                     .replacingOccurrences(of: "\"", with: "\\\"")
                     .replacingOccurrences(of: "[", with: "\\[")
+                    .replacingOccurrences(of: "]", with: "\\]")
+                    .replacingOccurrences(of: "{", with: "\\{")
+                    .replacingOccurrences(of: "}", with: "\\}")
                     .replacingOccurrences(of: "$", with: "\\$")
+                    .replacingOccurrences(of: ";", with: "\\;")
                 
                 scriptContent = """
                 #!/usr/bin/expect -f
@@ -74,7 +78,12 @@ public struct TerminalLauncher {
                 await MainActor.run {
                     _ = NSWorkspace.shared.open(fileURL)
                 }
-                
+
+                // Delete the script file after a delay so Terminal has time to read it.
+                // This is especially important for Expect scripts that contain plaintext passwords.
+                try? await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds
+                try? FileManager.default.removeItem(at: fileURL)
+
             } catch {
                 print("Failed to launch terminal: \(error)")
             }

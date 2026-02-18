@@ -239,11 +239,21 @@ struct HostDetailView: View {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(secret, forType: .string)
             copiedId = credential.id
-            
+
+            // Capture the change count so we only clear if the user hasn't copied something else
+            let changeCount = NSPasteboard.general.changeCount
+
             // Reset checkmark after 2 seconds
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                 if copiedId == credential.id {
                     copiedId = nil
+                }
+            }
+
+            // Clear the password from the clipboard after 30 seconds
+            DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
+                if NSPasteboard.general.changeCount == changeCount {
+                    NSPasteboard.general.clearContents()
                 }
             }
         }

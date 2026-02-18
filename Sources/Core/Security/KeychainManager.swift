@@ -13,7 +13,7 @@ public struct KeychainManager {
             kSecAttrService as String: serviceName,
             kSecAttrAccount as String: account,
             kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         ]
         
         // Delete existing item if any
