@@ -209,23 +209,28 @@ struct HostDetailView: View {
 
     
     func connect(protocol type: String) {
-        Task {
-            let cmd: String
-            if type.lowercased().contains("sftp") {
-                cmd = SFTPConnection.generateCommand(for: host, user: nil, key: vaultKey)
-            } else {
-                cmd = SSHConnection.generateCommand(for: host, user: nil, key: vaultKey)
+        if type.lowercased().contains("ssh") {
+            selectedTab = .terminal
+        } else {
+            Task {
+                let cmd: String
+                if type.lowercased().contains("sftp") {
+                    cmd = SFTPConnection.generateCommand(for: host, user: nil, key: vaultKey)
+                } else {
+                    // Fallback or other protocols
+                    cmd = SSHConnection.generateCommand(for: host, user: nil, key: vaultKey)
+                }
+                
+                // Find a password credential - prefer 'password' type
+                var password: String? = nil
+                var isInteractive = false
+                if let cred = viewModel.credentials.first(where: { $0.type == "password" }) {
+                    password = viewModel.decrypt(credential: cred)
+                    isInteractive = cred.isInteractive
+                }
+                
+                await TerminalLauncher.openInTerminal(command: cmd, password: password, isInteractive: isInteractive)
             }
-            
-            // Find a password credential - prefer 'password' type
-            var password: String? = nil
-            var isInteractive = false
-            if let cred = viewModel.credentials.first(where: { $0.type == "password" }) {
-                password = viewModel.decrypt(credential: cred)
-                isInteractive = cred.isInteractive
-            }
-            
-            await TerminalLauncher.openInTerminal(command: cmd, password: password, isInteractive: isInteractive)
         }
     }
 
