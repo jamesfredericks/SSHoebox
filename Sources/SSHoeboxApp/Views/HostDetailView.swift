@@ -15,6 +15,11 @@ struct HostDetailView: View {
     @State private var showingDeleteAlert = false
     @State private var credentialToEdit: Credential? = nil
     @State private var copiedId: String? = nil
+    @State private var selectedTab: HostTab = .credentials
+    
+    enum HostTab {
+        case credentials, terminal
+    }
     
     init(host: SavedHost, dbManager: DatabaseManager, vaultKey: SymmetricKey) {
         self.host = host
@@ -27,7 +32,11 @@ struct HostDetailView: View {
     var body: some View {
         VStack(spacing: 0) {
             heroHeader
-            contentList
+            if selectedTab == .credentials {
+                contentList
+            } else {
+                TerminalTabView(host: host, dbManager: dbManager, vaultKey: vaultKey)
+            }
         }
         .navigationTitle("") // Hide default title since we have a hero
         .toolbar {
@@ -81,40 +90,51 @@ struct HostDetailView: View {
     // MARK: - Subviews
     
     private var heroHeader: some View {
-        VStack(alignment: .leading, spacing: DesignSystem.Spacing.large) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: DesignSystem.Spacing.tight) {
-                    Text(host.decryptedName(using: vaultKey))
-                        .font(DesignSystem.Typography.hero())
-                    
-                    HStack(spacing: DesignSystem.Spacing.standard) {
-                        Text(host.protocolType.uppercased())
-                            .font(DesignSystem.Typography.label())
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(DesignSystem.Colors.accent.opacity(0.1))
-                            .foregroundStyle(DesignSystem.Colors.accent) // Use accent color for text too
-                            .cornerRadius(DesignSystem.Radius.sm)
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: DesignSystem.Spacing.large) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: DesignSystem.Spacing.tight) {
+                        Text(host.decryptedName(using: vaultKey))
+                            .font(DesignSystem.Typography.hero())
                         
-                        Text("\(host.decryptedUser(using: vaultKey))@\(host.decryptedHostname(using: vaultKey)):\(host.port)")
-                            .font(DesignSystem.Typography.mono())
-                            .foregroundStyle(DesignSystem.Colors.textSecondary)
+                        HStack(spacing: DesignSystem.Spacing.standard) {
+                            Text(host.protocolType.uppercased())
+                                .font(DesignSystem.Typography.label())
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(DesignSystem.Colors.accent.opacity(0.1))
+                                .foregroundStyle(DesignSystem.Colors.accent)
+                                .cornerRadius(DesignSystem.Radius.sm)
+                            
+                            Text("\(host.decryptedUser(using: vaultKey))@\(host.decryptedHostname(using: vaultKey)):\(host.port)")
+                                .font(DesignSystem.Typography.mono())
+                                .foregroundStyle(DesignSystem.Colors.textSecondary)
+                        }
                     }
+                    
+                    Spacer()
+                    
+                    // Primary Action
+                    Button("Connect") {
+                        connect(protocol: host.protocolType)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
                 }
                 
-                Spacer()
-                
-                // Primary Action
-                Button("Connect") {
-                    connect(protocol: host.protocolType)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+                Divider()
             }
+            .padding(DesignSystem.Spacing.large)
             
-            Divider()
+            // Tab picker
+            Picker("", selection: $selectedTab) {
+                Label("Credentials", systemImage: "key").tag(HostDetailView.HostTab.credentials)
+                Label("Terminal", systemImage: "terminal").tag(HostDetailView.HostTab.terminal)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, DesignSystem.Spacing.large)
+            .padding(.vertical, DesignSystem.Spacing.standard)
         }
-        .padding(DesignSystem.Spacing.large)
         .background(DesignSystem.Colors.surface)
     }
     

@@ -3,7 +3,7 @@
 # Configuration
 APP_NAME="SSHoebox"
 BUNDLE_ID="com.sshoebox.app"
-VERSION="1.8.0"
+VERSION="1.9.0"
 BUILD_DIR=".build/release"
 DIST_DIR="dist"
 APP_BUNDLE="${DIST_DIR}/${APP_NAME}.app"
