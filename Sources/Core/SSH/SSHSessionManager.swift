@@ -103,39 +103,41 @@ public class SSHSessionManager: ObservableObject {
                 let sshClient = try await SSHClient.connect(to: settings)
                 await MainActor.run { self.client = sshClient }
                 
-                // Open an interactive shell session (TTY mode, macOS 14 compatible)
-                let outputStream = try await sshClient.executeCommandStream("", inShell: true)
-                
-                await MainActor.run { self.connectionState = .connected }
-                
-                // Forward stdin from our stream to the SSH channel
-                // We use a separate task to pump stdin while we read stdout
-                let stdinTask = Task {
-                    for await data in stdinStream {
-                        // Send data via executeCommand's stdin channel
-                        // Note: stdin injection for TTY sessions requires channel-level access
-                        // We use the client's underlying channel write mechanism
-                        _ = data // handled via channel write below
+                // Open an interactive shell session using TTY
+                // Note: withTTY creates a shell request with no command, avoiding the ";exit" issue
+                try await sshClient.withTTY { inbound, outbound in
+                    await MainActor.run { self.connectionState = .connected }
+                    
+                    // Handle Stdin
+                    let stdinTask = Task {
+                        for await data in stdinStream {
+                            var buffer = ByteBuffer(data: data)
+                            try await outbound.write(buffer)
+                        }
                     }
-                }
-                
-                // Read SSH output and forward to terminal view
-                for try await chunk in outputStream {
-                    switch chunk {
-                    case .stdout(let buffer):
-                        let data = Data(buffer.readableBytesView)
-                        await MainActor.run { self.onOutput?(data) }
-                    case .stderr(let buffer):
-                        let data = Data(buffer.readableBytesView)
-                        await MainActor.run { self.onOutput?(data) }
+                    
+                    // Handle Output and Resize
+                    // We need to capture outbound to support resize
+                    // But we can't easily exfiltrate it from this scope.
+                    // For now, resize is TODO or needs refactoring.
+                    
+                    for await output in inbound {
+                        switch output {
+                        case .stdout(let buffer):
+                            let data = Data(buffer.readableBytesView)
+                            await MainActor.run { self.onOutput?(data) }
+                        case .stderr(let buffer):
+                            let data = Data(buffer.readableBytesView)
+                            await MainActor.run { self.onOutput?(data) }
+                        }
                     }
-                }
-                
-                stdinTask.cancel()
-                
-                await MainActor.run {
-                    self.connectionState = .disconnected
-                    self.onDisconnect?()
+                    
+                    stdinTask.cancel()
+                    
+                    await MainActor.run {
+                        self.connectionState = .disconnected
+                        self.onDisconnect?()
+                    }
                 }
                 
             } catch {
