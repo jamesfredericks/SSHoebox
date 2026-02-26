@@ -75,6 +75,7 @@ public struct BiometricAuthManager {
             let status = addKeychainItem(keyData: keyData, access: access)
             if status == errSecSuccess {
                 UserDefaults.standard.set(true, forKey: "biometricUnlockEnabled")
+                UserDefaults.standard.set(1, forKey: "biometricEnrollmentStage")
                 return
             }
             // -34018 = errSecMissingEntitlement — fall through to next stage
@@ -90,6 +91,7 @@ public struct BiometricAuthManager {
             let status = addKeychainItem(keyData: keyData, access: access)
             if status == errSecSuccess {
                 UserDefaults.standard.set(true, forKey: "biometricUnlockEnabled")
+                UserDefaults.standard.set(2, forKey: "biometricEnrollmentStage")
                 return
             }
         }
@@ -103,6 +105,7 @@ public struct BiometricAuthManager {
         }
         
         UserDefaults.standard.set(true, forKey: "biometricUnlockEnabled")
+        UserDefaults.standard.set(3, forKey: "biometricEnrollmentStage")
     }
     
     // MARK: - Keychain Helpers
@@ -145,6 +148,8 @@ public struct BiometricAuthManager {
     
     /// Retrieves the vault key using biometric authentication.
     /// Always presents a Touch ID / Face ID prompt before accessing the keychain.
+    /// Makes a single targeted SecItemCopyMatching call based on the stored enrollment
+    /// stage — avoiding double macOS login keychain password prompts.
     public static func unlockWithBiometrics() async throws -> SymmetricKey {
         let context = LAContext()
         context.localizedReason = "Unlock SSHoebox vault"
@@ -159,31 +164,36 @@ public struct BiometricAuthManager {
             throw BiometricError.authenticationFailed(reason: error.localizedDescription)
         }
         
-        // Attempt retrieval with the authenticated context (works when stored with SecAccessControl)
-        let queryWithContext: [String: Any] = [
-            kSecClass as String:                     kSecClassGenericPassword,
-            kSecAttrService as String:               serviceName,
-            kSecAttrAccount as String:               keychainAccount,
-            kSecReturnData as String:                true,
-            kSecMatchLimit as String:                kSecMatchLimitOne,
-            kSecUseAuthenticationContext as String:  context
-        ]
+        // Build ONE query based on how the key was enrolled.
+        // This prevents triggering two separate macOS keychain access dialogs.
+        let enrollmentStage = UserDefaults.standard.integer(forKey: "biometricEnrollmentStage")
+        
+        let query: [String: Any]
+        if enrollmentStage == 3 {
+            // Fallback item — no SecAccessControl, but still pass the authenticated
+            // context so macOS knows the user just passed biometric verification.
+            query = [
+                kSecClass as String:                    kSecClassGenericPassword,
+                kSecAttrService as String:              serviceName,
+                kSecAttrAccount as String:              keychainAccount,
+                kSecReturnData as String:               true,
+                kSecMatchLimit as String:               kSecMatchLimitOne,
+                kSecUseAuthenticationContext as String: context
+            ]
+        } else {
+            // Stage 1 or 2 — item was stored with SecAccessControl, use context.
+            query = [
+                kSecClass as String:                    kSecClassGenericPassword,
+                kSecAttrService as String:              serviceName,
+                kSecAttrAccount as String:              keychainAccount,
+                kSecReturnData as String:               true,
+                kSecMatchLimit as String:               kSecMatchLimitOne,
+                kSecUseAuthenticationContext as String: context
+            ]
+        }
         
         var item: CFTypeRef?
-        var status = SecItemCopyMatching(queryWithContext as CFDictionary, &item)
-        
-        // If context-authenticated retrieval fails, try a plain query
-        // (this is the path used when the fallback enrollment was used)
-        if status != errSecSuccess {
-            let queryPlain: [String: Any] = [
-                kSecClass as String:       kSecClassGenericPassword,
-                kSecAttrService as String: serviceName,
-                kSecAttrAccount as String: keychainAccount,
-                kSecReturnData as String:  true,
-                kSecMatchLimit as String:  kSecMatchLimitOne
-            ]
-            status = SecItemCopyMatching(queryPlain as CFDictionary, &item)
-        }
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
         
         guard status == errSecSuccess, let keyData = item as? Data else {
             throw BiometricError.keychainError(status: status)
@@ -198,6 +208,7 @@ public struct BiometricAuthManager {
     public static func revokeBiometric() {
         deleteKeychainItem()
         UserDefaults.standard.set(false, forKey: "biometricUnlockEnabled")
+        UserDefaults.standard.removeObject(forKey: "biometricEnrollmentStage")
     }
 }
 
