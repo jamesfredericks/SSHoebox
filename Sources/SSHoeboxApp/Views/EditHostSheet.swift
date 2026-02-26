@@ -13,18 +13,19 @@ struct EditHostSheet: View {
     @State private var port: String
     @State private var protocolType: String
     @State private var user: String
+    @State private var selectedGroupId: String?
     
     init(viewModel: HostsViewModel, host: SavedHost, vaultKey: SymmetricKey) {
         self.viewModel = viewModel
         self.host = host
         self.vaultKey = vaultKey
         
-        // Decrypt and pre-populate fields
         _name = State(initialValue: host.decryptedName(using: vaultKey))
         _hostname = State(initialValue: host.decryptedHostname(using: vaultKey))
         _port = State(initialValue: String(host.port))
         _protocolType = State(initialValue: host.protocolType)
         _user = State(initialValue: host.decryptedUser(using: vaultKey))
+        _selectedGroupId = State(initialValue: host.groupId)
     }
     
     var body: some View {
@@ -47,6 +48,17 @@ struct EditHostSheet: View {
                     }
                     .pickerStyle(.segmented)
                 }
+                
+                if !viewModel.groups.isEmpty {
+                    Section("Group") {
+                        Picker("Group", selection: $selectedGroupId) {
+                            Text("None").tag(String?.none)
+                            ForEach(viewModel.groups) { group in
+                                Text(group.name).tag(Optional(group.id))
+                            }
+                        }
+                    }
+                }
             }
             .formStyle(.grouped)
             .navigationTitle("Edit Host")
@@ -63,7 +75,8 @@ struct EditHostSheet: View {
                                 hostname: hostname,
                                 port: portInt,
                                 protocolType: protocolType,
-                                user: user
+                                user: user,
+                                groupId: selectedGroupId
                             )
                             dismiss()
                         }

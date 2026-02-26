@@ -9,6 +9,7 @@ struct AddHostSheet: View {
     @State private var port = "22"
     @State private var protocolType = "ssh"
     @State private var user = ""
+    @State private var selectedGroupId: String? = nil
     
     // New Credential Fields
     @State private var credentialType = "none" // none, password, key
@@ -35,6 +36,17 @@ struct AddHostSheet: View {
                         Text("FTP").tag("ftp")
                     }
                     .pickerStyle(.segmented)
+                }
+                
+                if !viewModel.groups.isEmpty {
+                    Section("Group") {
+                        Picker("Group", selection: $selectedGroupId) {
+                            Text("None").tag(String?.none)
+                            ForEach(viewModel.groups) { group in
+                                Text(group.name).tag(Optional(group.id))
+                            }
+                        }
+                    }
                 }
                 
                 Section("Initial Credential (Optional)") {
@@ -69,11 +81,12 @@ struct AddHostSheet: View {
                     Button("Save") {
                         if let portInt = Int(port), !name.isEmpty, !hostname.isEmpty {
                             viewModel.addHost(
-                                name: name, 
-                                hostname: hostname, 
-                                port: portInt, 
-                                protocolType: protocolType, 
+                                name: name,
+                                hostname: hostname,
+                                port: portInt,
+                                protocolType: protocolType,
                                 user: user,
+                                groupId: selectedGroupId,
                                 credentialType: credentialType,
                                 credentialSecret: credentialType == "password" ? password : keyPath
                             )

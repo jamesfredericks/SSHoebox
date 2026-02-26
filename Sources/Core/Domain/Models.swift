@@ -1,6 +1,27 @@
 import Foundation
 import GRDB
 
+// MARK: - HostGroup
+
+public struct HostGroup: Codable, FetchableRecord, PersistableRecord, Identifiable {
+    public static var databaseTableName = "hostGroup"
+    
+    public var id: String
+    public var name: String
+    public var sortOrder: Int
+    public var createdAt: Date
+    
+    public init(id: String = UUID().uuidString,
+                name: String,
+                sortOrder: Int = 0,
+                createdAt: Date = Date()) {
+        self.id = id
+        self.name = name
+        self.sortOrder = sortOrder
+        self.createdAt = createdAt
+    }
+}
+
 // MARK: - SavedHost
 
 public struct SavedHost: Codable, FetchableRecord, PersistableRecord, Identifiable {
@@ -12,6 +33,7 @@ public struct SavedHost: Codable, FetchableRecord, PersistableRecord, Identifiab
     public var port: Int
     public var protocolType: String // "ssh", "sftp", "ftp"
     public var user: String // Default user for display or connection
+    public var groupId: String? // Optional reference to HostGroup
     public var createdAt: Date
     public var updatedAt: Date
     
@@ -21,6 +43,7 @@ public struct SavedHost: Codable, FetchableRecord, PersistableRecord, Identifiab
                 port: Int = 22,
                 protocolType: String = "ssh",
                 user: String = "",
+                groupId: String? = nil,
                 createdAt: Date = Date(),
                 updatedAt: Date = Date()) {
         self.id = id
@@ -29,6 +52,7 @@ public struct SavedHost: Codable, FetchableRecord, PersistableRecord, Identifiab
         self.port = port
         self.protocolType = protocolType
         self.user = user
+        self.groupId = groupId
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
