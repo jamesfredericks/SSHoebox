@@ -5,7 +5,8 @@ struct PreferencesView: View {
     @ObservedObject var viewModel: VaultViewModel
     @ObservedObject var themeManager = ThemeManager.shared
     @State private var autoLockTimeout: Int = 15
-    @State private var isBiometricEnabled: Bool = BiometricAuthManager.isBiometricEnrolled
+    @State private var isBiometricEnabled: Bool = false
+    @State private var showBiometricVaultLockedAlert: Bool = false
     
     var body: some View {
         Form {
@@ -43,10 +44,20 @@ struct PreferencesView: View {
                             .foregroundStyle(DesignSystem.Colors.textPrimary)
                     }
                     .onChange(of: isBiometricEnabled) { enabled in
-                        if !enabled {
+                        if enabled {
+                            // Re-enroll using the current vault key (requires vault to be unlocked)
+                            if viewModel.vaultKey != nil {
+                                viewModel.enrollBiometrics()
+                                // Sync toggle back if enrollment failed
+                                isBiometricEnabled = BiometricAuthManager.isBiometricEnrolled
+                            } else {
+                                // Vault is locked — can't enroll without the key
+                                isBiometricEnabled = false
+                                showBiometricVaultLockedAlert = true
+                            }
+                        } else {
                             BiometricAuthManager.revokeBiometric()
                         }
-                        // Note: enabling requires the vault to be unlocked (done via setup prompt)
                     }
                 } header: {
                     Text("Biometric Unlock")
@@ -146,13 +157,28 @@ struct PreferencesView: View {
         .tint(DesignSystem.Colors.accent)
         .navigationTitle("Preferences")
         .onAppear {
-            // Load saved preference
+            // Load saved preferences
             let saved = UserDefaults.standard.integer(forKey: "autoLockTimeout")
             if saved == 0 && !UserDefaults.standard.bool(forKey: "hasSetAutoLockTimeout") {
                 autoLockTimeout = 15 // Default
             } else {
                 autoLockTimeout = saved
             }
+            // Read biometric state fresh from the source of truth
+            isBiometricEnabled = BiometricAuthManager.isBiometricEnrolled
+        }
+        .alert("Vault Locked", isPresented: $showBiometricVaultLockedAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Unlock your vault with your master password first, then enable \(BiometricAuthManager.biometricTypeName()) from Preferences.")
+        }
+        .alert("Error", isPresented: Binding(
+            get: { viewModel.errorMessage != nil },
+            set: { if !$0 { viewModel.errorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(viewModel.errorMessage ?? "")
         }
     }
 }

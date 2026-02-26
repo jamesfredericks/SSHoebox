@@ -184,7 +184,9 @@ class VaultViewModel: ObservableObject {
         do {
             try BiometricAuthManager.enrollBiometric(vaultKey: key)
             self.showBiometricSetupPrompt = false
+            self.errorMessage = nil
         } catch {
+            // Keep the setup prompt open and surface the error to the user
             self.errorMessage = "Failed to enable biometric unlock: \(error.localizedDescription)"
         }
     }

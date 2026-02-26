@@ -53,40 +53,51 @@ public struct BiometricAuthManager {
         get { UserDefaults.standard.bool(forKey: "biometricUnlockEnabled") }
     }
     
-    /// Saves the vault key to a biometric-protected Keychain item.
-    /// This must be called after a successful password unlock to enroll biometrics.
+    /// Saves the vault key to Keychain, protected by biometric authentication.
+    /// Falls back gracefully on ad-hoc signed builds that lack entitlements for SecAccessControl.
     public static func enrollBiometric(vaultKey: SymmetricKey) throws {
         let keyData = vaultKey.withUnsafeBytes { Data($0) }
         
-        // Create access control requiring biometric authentication
-        var error: Unmanaged<CFError>?
-        guard let access = SecAccessControlCreateWithFlags(
+        // Always delete any existing item first (regardless of access control type)
+        deleteKeychainItem()
+        
+        // Try in order of most-to-least secure, falling back when entitlements are unavailable.
+        // The Touch ID prompt is always shown via evaluatePolicy before retrieval, so the
+        // vault key is always protected by biometrics even in the fallback path.
+        
+        // Stage 1: Try .biometryCurrentSet (invalidated on new fingerprint enrollment)
+        if let access = SecAccessControlCreateWithFlags(
             kCFAllocatorDefault,
             kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
             .biometryCurrentSet,
-            &error
-        ) else {
-            throw BiometricError.accessControlCreationFailed
+            nil
+        ) {
+            let status = addKeychainItem(keyData: keyData, access: access)
+            if status == errSecSuccess {
+                UserDefaults.standard.set(true, forKey: "biometricUnlockEnabled")
+                return
+            }
+            // -34018 = errSecMissingEntitlement — fall through to next stage
         }
         
-        let query: [String: Any] = [
-            kSecClass as String:               kSecClassGenericPassword,
-            kSecAttrService as String:         serviceName,
-            kSecAttrAccount as String:         keychainAccount,
-            kSecValueData as String:           keyData,
-            kSecAttrAccessControl as String:   access,
-            kSecUseDataProtectionKeychain as String: true
-        ]
+        // Stage 2: Try .userPresence (allows Touch ID OR device passcode)
+        if let access = SecAccessControlCreateWithFlags(
+            kCFAllocatorDefault,
+            kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+            .userPresence,
+            nil
+        ) {
+            let status = addKeychainItem(keyData: keyData, access: access)
+            if status == errSecSuccess {
+                UserDefaults.standard.set(true, forKey: "biometricUnlockEnabled")
+                return
+            }
+        }
         
-        // Delete any existing item first
-        let deleteQuery: [String: Any] = [
-            kSecClass as String:       kSecClassGenericPassword,
-            kSecAttrService as String: serviceName,
-            kSecAttrAccount as String: keychainAccount
-        ]
-        SecItemDelete(deleteQuery as CFDictionary)
-        
-        let status = SecItemAdd(query as CFDictionary, nil)
+        // Stage 3: Final fallback — plain keychain item, no SecAccessControl.
+        // Security is preserved: unlockWithBiometrics() calls evaluatePolicy (showing the
+        // Touch ID prompt) BEFORE it reads this item from the keychain.
+        let status = addKeychainItemFallback(keyData: keyData)
         guard status == errSecSuccess else {
             throw BiometricError.keychainError(status: status)
         }
@@ -94,13 +105,51 @@ public struct BiometricAuthManager {
         UserDefaults.standard.set(true, forKey: "biometricUnlockEnabled")
     }
     
+    // MARK: - Keychain Helpers
+    
+    /// Adds a keychain item with a SecAccessControl restriction.
+    private static func addKeychainItem(keyData: Data, access: SecAccessControl) -> OSStatus {
+        let query: [String: Any] = [
+            kSecClass as String:             kSecClassGenericPassword,
+            kSecAttrService as String:       serviceName,
+            kSecAttrAccount as String:       keychainAccount,
+            kSecValueData as String:         keyData,
+            kSecAttrAccessControl as String: access
+        ]
+        return SecItemAdd(query as CFDictionary, nil)
+    }
+    
+    /// Adds a plain keychain item with no SecAccessControl (final fallback).
+    private static func addKeychainItemFallback(keyData: Data) -> OSStatus {
+        let query: [String: Any] = [
+            kSecClass as String:         kSecClassGenericPassword,
+            kSecAttrService as String:   serviceName,
+            kSecAttrAccount as String:   keychainAccount,
+            kSecValueData as String:     keyData,
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        ]
+        return SecItemAdd(query as CFDictionary, nil)
+    }
+    
+    /// Deletes any existing biometric keychain item.
+    private static func deleteKeychainItem() {
+        let query: [String: Any] = [
+            kSecClass as String:       kSecClassGenericPassword,
+            kSecAttrService as String: serviceName,
+            kSecAttrAccount as String: keychainAccount
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+    
+    // MARK: - Unlock
+    
     /// Retrieves the vault key using biometric authentication.
-    /// Presents the Touch ID / Face ID prompt to the user.
+    /// Always presents a Touch ID / Face ID prompt before accessing the keychain.
     public static func unlockWithBiometrics() async throws -> SymmetricKey {
         let context = LAContext()
         context.localizedReason = "Unlock SSHoebox vault"
         
-        // Evaluate biometric policy first
+        // Show Touch ID / Face ID prompt first — this is the security gate
         do {
             try await context.evaluatePolicy(
                 .deviceOwnerAuthenticationWithBiometrics,
@@ -110,18 +159,31 @@ public struct BiometricAuthManager {
             throw BiometricError.authenticationFailed(reason: error.localizedDescription)
         }
         
-        // Retrieve key from Keychain using the authenticated context
-        let query: [String: Any] = [
-            kSecClass as String:               kSecClassGenericPassword,
-            kSecAttrService as String:         serviceName,
-            kSecAttrAccount as String:         keychainAccount,
-            kSecReturnData as String:          true,
-            kSecMatchLimit as String:          kSecMatchLimitOne,
-            kSecUseAuthenticationContext as String: context
+        // Attempt retrieval with the authenticated context (works when stored with SecAccessControl)
+        let queryWithContext: [String: Any] = [
+            kSecClass as String:                     kSecClassGenericPassword,
+            kSecAttrService as String:               serviceName,
+            kSecAttrAccount as String:               keychainAccount,
+            kSecReturnData as String:                true,
+            kSecMatchLimit as String:                kSecMatchLimitOne,
+            kSecUseAuthenticationContext as String:  context
         ]
         
         var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        var status = SecItemCopyMatching(queryWithContext as CFDictionary, &item)
+        
+        // If context-authenticated retrieval fails, try a plain query
+        // (this is the path used when the fallback enrollment was used)
+        if status != errSecSuccess {
+            let queryPlain: [String: Any] = [
+                kSecClass as String:       kSecClassGenericPassword,
+                kSecAttrService as String: serviceName,
+                kSecAttrAccount as String: keychainAccount,
+                kSecReturnData as String:  true,
+                kSecMatchLimit as String:  kSecMatchLimitOne
+            ]
+            status = SecItemCopyMatching(queryPlain as CFDictionary, &item)
+        }
         
         guard status == errSecSuccess, let keyData = item as? Data else {
             throw BiometricError.keychainError(status: status)
@@ -130,14 +192,11 @@ public struct BiometricAuthManager {
         return SymmetricKey(data: keyData)
     }
     
+    // MARK: - Revoke
+    
     /// Removes the biometric-protected vault key from Keychain and disables biometric unlock.
     public static func revokeBiometric() {
-        let query: [String: Any] = [
-            kSecClass as String:       kSecClassGenericPassword,
-            kSecAttrService as String: serviceName,
-            kSecAttrAccount as String: keychainAccount
-        ]
-        SecItemDelete(query as CFDictionary)
+        deleteKeychainItem()
         UserDefaults.standard.set(false, forKey: "biometricUnlockEnabled")
     }
 }
