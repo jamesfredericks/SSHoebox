@@ -10,6 +10,7 @@ struct HostDetailView: View {
     let vaultKey: SymmetricKey
     @StateObject private var viewModel: CredentialsViewModel
     @StateObject private var hostsViewModel: HostsViewModel
+    @StateObject private var sessionStore: TerminalSessionStore
     @State private var showingAddCredential = false
     @State private var showingEditHost = false
     @State private var showingDeleteAlert = false
@@ -27,15 +28,23 @@ struct HostDetailView: View {
         self.vaultKey = vaultKey
         _viewModel = StateObject(wrappedValue: CredentialsViewModel(dbManager: dbManager, vaultKey: vaultKey, hostId: host.id))
         _hostsViewModel = StateObject(wrappedValue: HostsViewModel(dbManager: dbManager, vaultKey: vaultKey))
+        _sessionStore = StateObject(wrappedValue: TerminalSessionStore(host: host, dbManager: dbManager, vaultKey: vaultKey))
     }
     
     var body: some View {
         VStack(spacing: 0) {
             heroHeader
-            if selectedTab == .credentials {
+            
+            // Always render both tab contents; hide with opacity so views are never destroyed.
+            // This keeps SSH sessions alive when switching to the Credentials tab and back.
+            ZStack {
                 contentList
-            } else {
-                TerminalTabView(host: host, dbManager: dbManager, vaultKey: vaultKey)
+                    .opacity(selectedTab == .credentials ? 1 : 0)
+                    .allowsHitTesting(selectedTab == .credentials)
+                
+                TerminalTabView(store: sessionStore)
+                    .opacity(selectedTab == .terminal ? 1 : 0)
+                    .allowsHitTesting(selectedTab == .terminal)
             }
         }
         .navigationTitle("") // Hide default title since we have a hero
