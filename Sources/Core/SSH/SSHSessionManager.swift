@@ -217,7 +217,9 @@ public class SSHSessionManager: ObservableObject {
     }
     
     /// Notify the SSH server of a terminal resize.
+    /// Guards against zero/negative values that crash Citadel's WindowChangeRequest.
     public func resize(cols: Int, rows: Int) {
+        guard cols > 0, rows > 0 else { return }
         currentTerminalSize = (cols, rows)
         
         guard let writer = stdinWriter else { return }

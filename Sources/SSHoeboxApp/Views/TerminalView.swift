@@ -58,6 +58,7 @@ struct RemoteTerminalView: NSViewRepresentable {
         // MARK: TerminalViewDelegate — required methods
         
         func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
+            guard newCols > 0, newRows > 0 else { return }
             Task { @MainActor in session.resize(cols: newCols, rows: newRows) }
         }
         
