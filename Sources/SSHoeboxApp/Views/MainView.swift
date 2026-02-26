@@ -4,6 +4,7 @@ import SSHoeboxCore
 struct MainView: View {
     @ObservedObject var viewModel: VaultViewModel
     @ObservedObject private var themeManager = ThemeManager.shared
+    @StateObject private var sessionRegistry = TerminalSessionRegistry()
     @State private var selection: SidebarItem? = .hosts
     
     enum SidebarItem: Hashable {
@@ -93,5 +94,6 @@ struct MainView: View {
                 }
             }
         }
+        .environmentObject(sessionRegistry)
     }
 }

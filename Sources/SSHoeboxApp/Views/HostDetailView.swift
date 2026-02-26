@@ -4,13 +4,13 @@ import CryptoKit
 
 struct HostDetailView: View {
     @ObservedObject private var themeManager = ThemeManager.shared
+    @EnvironmentObject private var sessionRegistry: TerminalSessionRegistry
     @Environment(\.dismiss) var dismiss
     let host: SavedHost
     let dbManager: DatabaseManager
     let vaultKey: SymmetricKey
     @StateObject private var viewModel: CredentialsViewModel
     @StateObject private var hostsViewModel: HostsViewModel
-    @StateObject private var sessionStore: TerminalSessionStore
     @State private var showingAddCredential = false
     @State private var showingEditHost = false
     @State private var showingDeleteAlert = false
@@ -28,10 +28,10 @@ struct HostDetailView: View {
         self.vaultKey = vaultKey
         _viewModel = StateObject(wrappedValue: CredentialsViewModel(dbManager: dbManager, vaultKey: vaultKey, hostId: host.id))
         _hostsViewModel = StateObject(wrappedValue: HostsViewModel(dbManager: dbManager, vaultKey: vaultKey))
-        _sessionStore = StateObject(wrappedValue: TerminalSessionStore(host: host, dbManager: dbManager, vaultKey: vaultKey))
     }
     
     var body: some View {
+        let sessionStore = sessionRegistry.store(for: host, dbManager: dbManager, vaultKey: vaultKey)
         VStack(spacing: 0) {
             heroHeader
             

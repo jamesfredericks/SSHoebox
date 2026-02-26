@@ -3,9 +3,35 @@ import SwiftUI
 import SSHoeboxCore
 import CryptoKit
 
-/// A stable, long-lived store for SSH terminal sessions for a single host.
-/// Owned as a @StateObject by HostDetailView so sessions survive tab switches
-/// and other transient view updates.
+/// A long-lived registry that holds one TerminalSessionStore per host.
+/// Owned as a @StateObject on MainView and injected as an @EnvironmentObject
+/// so session stores survive sidebar navigation, host-list refreshes, and
+/// any other view recreation throughout the app's lifetime.
+@MainActor
+class TerminalSessionRegistry: ObservableObject {
+    private var stores: [String: TerminalSessionStore] = [:]
+
+    /// Returns the existing store for a host, or creates one if none exists.
+    func store(for host: SavedHost, dbManager: DatabaseManager, vaultKey: SymmetricKey) -> TerminalSessionStore {
+        if let existing = stores[host.id] {
+            return existing
+        }
+        let newStore = TerminalSessionStore(host: host, dbManager: dbManager, vaultKey: vaultKey)
+        stores[host.id] = newStore
+        return newStore
+    }
+
+    /// Removes the store for a host (call when a host is deleted).
+    func removeStore(for hostId: String) {
+        if let store = stores[hostId] {
+            store.disconnectAll()
+        }
+        stores.removeValue(forKey: hostId)
+    }
+}
+
+/// Owns SSH terminal sessions for a single host.
+/// Kept alive by TerminalSessionRegistry regardless of view recreation.
 @MainActor
 class TerminalSessionStore: ObservableObject {
     @Published var sessions: [TerminalSession] = []
@@ -29,8 +55,6 @@ class TerminalSessionStore: ObservableObject {
 
     // MARK: - Session Lifecycle
 
-    /// Opens a new SSH session tab. Called automatically when the terminal
-    /// tab is first shown (if no sessions exist) and by the "+" button.
     func openNewSession() {
         credentialsViewModel.fetchCredentials()
 
@@ -61,6 +85,12 @@ class TerminalSessionStore: ObservableObject {
         selectedSessionId = session.id
     }
 
+    func disconnectAll() {
+        sessions.forEach { $0.manager.disconnect() }
+        sessions.removeAll()
+        selectedSessionId = nil
+    }
+
     // MARK: - Connection
 
     private func connectSession(manager: SSHSessionManager) async {
@@ -71,7 +101,6 @@ class TerminalSessionStore: ObservableObject {
         if let cred = credentialsViewModel.credentials.first(where: { $0.type == "password" }) {
             let credUser = cred.decryptedUsername(using: vaultKey)
             let username = credUser.isEmpty ? defaultUser : credUser
-
             if let password = credentialsViewModel.decrypt(credential: cred) {
                 await manager.connect(host: hostname, port: port, username: username, password: password)
             } else {
