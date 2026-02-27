@@ -111,6 +111,10 @@ if ls "${BUILD_DIR}"/*.bundle > /dev/null 2>&1; then
     echo "✅ Copied SPM resource bundles."
 fi
 
+# Fix permissions on resource bundle files (SPM builds some files as read-only)
+# Without this, cp -r to /Applications will fail with "Permission denied"
+chmod -R a+rX "${APP_BUNDLE}"
+
 # 7. Ad-hoc Code Signing (no entitlements — required for macOS 15+ AMFI compatibility)
 # NOTE: Any entitlements (even app-sandbox=false) on an ad-hoc signed binary
 # trigger AMFI signature validation which rejects unsigned/ad-hoc binaries.

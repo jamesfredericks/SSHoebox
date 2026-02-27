@@ -44,8 +44,8 @@ cd SSHoebox
 # Build and package the app
 ./scripts/bundle_app.sh
 
-# Move to Applications
-cp -r dist/SSHoebox.app /Applications/
+# Move to Applications (use sudo to handle any existing install)
+sudo cp -r dist/SSHoebox.app /Applications/
 ```
 
 Then double-click `SSHoebox.app` in `/Applications` — no warnings, no dialogs, Touch ID works out of the box.
