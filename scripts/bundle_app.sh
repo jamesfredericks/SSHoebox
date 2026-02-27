@@ -88,6 +88,8 @@ cat > "${APP_BUNDLE}/Contents/Info.plist" <<PLIST
 PLIST
 
 # 5b. Generate Entitlements (required for Touch ID / Keychain access)
+# NOTE: keychain-access-groups requires a real Developer ID cert and must NOT
+# be included in ad-hoc signed builds — macOS will refuse to launch the app.
 ENTITLEMENTS_FILE="${DIST_DIR}/SSHoebox.entitlements"
 echo "🔑 Generating entitlements file..."
 cat > "${ENTITLEMENTS_FILE}" <<ENTITLEMENTS
@@ -97,10 +99,6 @@ cat > "${ENTITLEMENTS_FILE}" <<ENTITLEMENTS
 <dict>
     <key>com.apple.security.app-sandbox</key>
     <false/>
-    <key>keychain-access-groups</key>
-    <array>
-        <string>${BUNDLE_ID}</string>
-    </array>
 </dict>
 </plist>
 ENTITLEMENTS
