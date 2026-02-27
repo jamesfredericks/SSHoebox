@@ -15,7 +15,7 @@ struct VaultUnlockView: View {
             VStack(spacing: 30) {
                 // Centered content container
                 VStack(spacing: 25) {
-                    if let logoUrl = Bundle.module.url(forResource: "logo", withExtension: "png"),
+                    if let logoUrl = Bundle.main.url(forResource: "logo", withExtension: "png"),
                        let nsImage = NSImage(contentsOf: logoUrl) {
                         Image(nsImage: nsImage)
                             .resizable()
