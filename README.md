@@ -58,7 +58,7 @@ Then double-click `SSHoebox.app` in `/Applications` — no warnings, no dialogs,
 2. Unzip and move `SSHoebox.app` to your `/Applications` folder
 3. Run the following one-time command in Terminal to allow the app to run:
    ```bash
-   xattr -cr /Applications/SSHoebox.app
+   sudo xattr -cr /Applications/SSHoebox.app
    ```
 4. Double-click `SSHoebox.app` to launch
 
