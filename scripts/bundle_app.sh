@@ -111,9 +111,11 @@ if ls "${BUILD_DIR}"/*.bundle > /dev/null 2>&1; then
     echo "✅ Copied SPM resource bundles."
 fi
 
-# 7. Ad-hoc Code Signing with entitlements (Required for macOS to run the app + Touch ID)
-echo "🔏 Signing the app bundle with entitlements..."
-codesign --force --deep --sign - --entitlements "${ENTITLEMENTS_FILE}" "${APP_BUNDLE}"
+# 7. Ad-hoc Code Signing (no entitlements — required for macOS 15+ AMFI compatibility)
+# NOTE: Any entitlements (even app-sandbox=false) on an ad-hoc signed binary
+# trigger AMFI signature validation which rejects unsigned/ad-hoc binaries.
+echo "🔏 Signing the app bundle..."
+codesign --force --deep --sign - "${APP_BUNDLE}"
 if [ $? -eq 0 ]; then
     echo "✅ App bundle signed successfully."
 else
