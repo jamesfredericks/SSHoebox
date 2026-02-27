@@ -142,7 +142,7 @@ struct PreferencesView: View {
                     Text("Version")
                         .foregroundStyle(DesignSystem.Colors.textPrimary)
                     Spacer()
-                    Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0")
+                    Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "2.2.1")
                         .foregroundStyle(DesignSystem.Colors.textSecondary)
                 }
             } header: {
