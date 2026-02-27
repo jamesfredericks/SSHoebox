@@ -26,41 +26,43 @@ SSHoebox is a secure, native macOS application for managing SSH and SFTP connect
 
 ## Installation
 
-### Option 1: Download Pre-built App (Recommended)
+### Option 1: Build from Source (Recommended for teams)
 
-1. Download the latest release from [Releases](https://github.com/jamesfredericks/SSHoebox/releases)
-2. Unzip `SSHoebox-v1.2.0.zip`
-3. Move `SSHoebox.app` to your `/Applications` folder
-4. **First launch:** Right-click the app → **Open** → Click **"Open"** in the security dialog
-5. Future launches can use double-click
-
-> **Note:** macOS will show a security warning because this app is not notarized with Apple. This is normal for open-source apps distributed outside the App Store.
-
-### Option 2: Build from Source
+Building from source is the **most reliable** way to install SSHoebox. It avoids macOS Gatekeeper restrictions entirely, guarantees full Touch ID support, and means you're running exactly the code you reviewed.
 
 **Requirements:**
 - macOS 14.0 (Sonoma) or later
-- Xcode 15.0+ or Swift toolchain
+- Swift toolchain (`xcode-select --install`)
 
 **Steps:**
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/jamesfredericks/SSHoebox.git
-   cd SSHoebox
-   ```
+```bash
+# Clone the repo
+git clone https://github.com/jamesfredericks/SSHoebox.git
+cd SSHoebox
 
-2. Run using Swift Package Manager:
-   ```bash
-   swift run
-   ```
-   Or open `Package.swift` in Xcode and run the `SSHoebox` scheme.
+# Build and package the app
+./scripts/bundle_app.sh
 
-3. **(Optional)** Build a standalone app:
+# Move to Applications
+cp -r dist/SSHoebox.app /Applications/
+```
+
+Then double-click `SSHoebox.app` in `/Applications` — no warnings, no dialogs, Touch ID works out of the box.
+
+---
+
+### Option 2: Pre-built Binary
+
+1. Download the latest `SSHoebox-v2.2.1.zip` from [Releases](https://github.com/jamesfredericks/SSHoebox/releases)
+2. Unzip and move `SSHoebox.app` to your `/Applications` folder
+3. Run the following one-time command in Terminal to allow the app to run:
    ```bash
-   ./scripts/bundle_app.sh
+   xattr -cr /Applications/SSHoebox.app
    ```
-   The app will be created in `dist/SSHoebox.app`
+4. Double-click `SSHoebox.app` to launch
+
+> **Why the extra command?** SSHoebox is signed with an ad-hoc certificate (not a paid Apple Developer ID) so macOS Gatekeeper blocks it by default. The `xattr -cr` command removes the quarantine flag macOS places on downloaded files. This is a standard workaround for open-source Mac apps distributed outside the App Store.
 
 ## First Run
 
