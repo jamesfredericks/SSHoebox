@@ -81,9 +81,30 @@ cat > "${APP_BUNDLE}/Contents/Info.plist" <<PLIST
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSFaceIDUsageDescription</key>
+    <string>SSHoebox uses Touch ID to securely unlock your vault.</string>
 </dict>
 </plist>
 PLIST
+
+# 5b. Generate Entitlements (required for Touch ID / Keychain access)
+ENTITLEMENTS_FILE="${DIST_DIR}/SSHoebox.entitlements"
+echo "🔑 Generating entitlements file..."
+cat > "${ENTITLEMENTS_FILE}" <<ENTITLEMENTS
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.app-sandbox</key>
+    <false/>
+    <key>keychain-access-groups</key>
+    <array>
+        <string>${BUNDLE_ID}</string>
+    </array>
+</dict>
+</plist>
+ENTITLEMENTS
+echo "✅ Entitlements file created."
 
 # 6. Copy Resources (Bundles)
 echo "🖼️  Copying resource bundles..."
@@ -92,9 +113,9 @@ if ls "${BUILD_DIR}"/*.bundle > /dev/null 2>&1; then
     echo "✅ Copied SPM resource bundles."
 fi
 
-# 7. Ad-hoc Code Signing (Required for macOS to run the app)
-echo "🔏 Signing the app bundle..."
-codesign --force --deep --sign - "${APP_BUNDLE}"
+# 7. Ad-hoc Code Signing with entitlements (Required for macOS to run the app + Touch ID)
+echo "🔏 Signing the app bundle with entitlements..."
+codesign --force --deep --sign - --entitlements "${ENTITLEMENTS_FILE}" "${APP_BUNDLE}"
 if [ $? -eq 0 ]; then
     echo "✅ App bundle signed successfully."
 else
