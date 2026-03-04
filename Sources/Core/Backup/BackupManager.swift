@@ -22,7 +22,7 @@ public class BackupManager: ObservableObject {
         // Checkpoint any pending WAL journal frames into the main DB file
         // so every write is included in the snapshot we're about to read.
         // checkpoint() requires a write transaction, so we use dbWriter.
-        try dbManager.dbWriter.write { db in
+        _ = try dbManager.dbWriter.write { db in
             try db.checkpoint(.full)
         }
         
