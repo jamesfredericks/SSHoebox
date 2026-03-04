@@ -1,11 +1,13 @@
 import Foundation
 import SwiftUI
 import CryptoKit
+import GRDB
 
 public struct VaultBackup: Codable {
     public let version: Int
     public let timestamp: Date
     public let vaultData: Data
+    public let vaultMetadata: Data?  // Keychain metadata (salt + validation), included from v2 onward
     public let checksum: String
 }
 
@@ -17,18 +19,29 @@ public class BackupManager: ObservableObject {
     }
     
     public func createExportData() throws -> Data {
-        // Read raw DB file bytes
-        let dbUrl = dbManager.dbWriter.path
-        let dbData = try Data(contentsOf: URL(fileURLWithPath: dbUrl))
+        // Checkpoint any pending WAL journal frames into the main DB file
+        // so every write is included in the snapshot we're about to read.
+        // checkpoint() requires a write transaction, so we use dbWriter.
+        try dbManager.dbWriter.write { db in
+            try db.checkpoint(.full)
+        }
         
-        // Calculate checksum
-        let checksum = SHA256.hash(data: dbData).description
+        // Now read the fully-checkpointed DB file bytes.
+        let dbPath = dbManager.dbWriter.path
+        let backupData = try Data(contentsOf: URL(fileURLWithPath: dbPath))
         
-        // Create wrapper
+        // Calculate checksum over the consistent snapshot
+        let checksum = SHA256.hash(data: backupData).description
+        
+        // Include vault metadata from Keychain so restore works even on a fresh
+        // install (or after a keychain wipe).
+        let vaultMetadata = try? KeychainManager.read(account: "vault_metadata")
+        
         let backup = VaultBackup(
-            version: 1,
+            version: 2,
             timestamp: Date(),
-            vaultData: dbData,
+            vaultData: backupData,
+            vaultMetadata: vaultMetadata,
             checksum: checksum
         )
         
@@ -37,8 +50,8 @@ public class BackupManager: ObservableObject {
         return try encoder.encode(backup)
     }
     
-    // Note: Restoration usually requires restarting the app or re-initializing the DatabaseManager
-    // For V1, we will replace the file and ask the user to restart.
+    // Note: Restoration requires restarting the app or re-initializing the DatabaseManager.
+    // For V1, we replace the file and ask the user to restart.
     public func restore(from data: Data) throws {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -47,13 +60,28 @@ public class BackupManager: ObservableObject {
         // Verify checksum
         let calculated = SHA256.hash(data: backup.vaultData).description
         guard calculated == backup.checksum else {
-            throw SecurityError.decryptionFailed // Reusing error or define new one
+            throw SecurityError.decryptionFailed // Checksum mismatch
         }
         
-        // Replace DB file
-        let dbUrl = URL(fileURLWithPath: dbManager.dbWriter.path)
+        // Restore vault metadata to Keychain if present in backup (v2+).
+        // This is critical: without the matching salt the encrypted DB fields
+        // cannot be decrypted, producing gibberish.
+        if let metadataToRestore = backup.vaultMetadata {
+            try KeychainManager.save(metadataToRestore, account: "vault_metadata")
+        }
         
-        // Atomic write
+        // Replace DB file atomically.
+        let dbUrl = URL(fileURLWithPath: dbManager.dbWriter.path)
         try backup.vaultData.write(to: dbUrl, options: .atomic)
+        
+        // Also remove any stale WAL / SHM sidecar files so SQLite starts clean.
+        let walUrl = URL(fileURLWithPath: dbManager.dbWriter.path + "-wal")
+        let shmUrl = URL(fileURLWithPath: dbManager.dbWriter.path + "-shm")
+        try? FileManager.default.removeItem(at: walUrl)
+        try? FileManager.default.removeItem(at: shmUrl)
     }
+}
+
+public enum BackupError: Error {
+    case databasePathUnavailable
 }
