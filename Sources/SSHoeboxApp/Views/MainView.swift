@@ -74,7 +74,7 @@ struct MainView: View {
                     GeneratorView()
                 case .backups:
                     if let db = viewModel.dbManager {
-                        BackupView(dbManager: db)
+                        BackupView(dbManager: db, vaultViewModel: viewModel)
                     }
                 case .preferences:
                     PreferencesView(viewModel: viewModel)

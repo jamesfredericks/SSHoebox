@@ -9,7 +9,8 @@ SSHoebox is a secure, native macOS application for managing SSH and SFTP connect
   - Master Password protection with strong KDF (PBKDF2-HMAC-SHA256)
   - SQLCipher-based encrypted database storage
   - **Touch ID / Face ID unlock** — unlock your vault with a fingerprint instead of typing your master password
-  
+  - **Portable Vault (Cloud Sync)** — cryptographic metadata is stored in a sidecar `vault_metadata.json` file, allowing you to seamlessly sync your vault across Macs using iCloud Drive, Dropbox, or any other private cloud provider.
+
 - **Connection Manager**:
   - Organize Hosts and Credentials (passwords, keys)
   - One-click connection launching for SSH and SFTP

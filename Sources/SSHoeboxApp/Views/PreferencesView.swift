@@ -35,6 +35,78 @@ struct PreferencesView: View {
                     .foregroundStyle(DesignSystem.Colors.textSecondary)
             }
             
+            // Vault Location Section
+            Section {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Current Location")
+                        .font(.caption)
+                        .foregroundStyle(DesignSystem.Colors.textSecondary)
+                    
+                    HStack {
+                        Text(viewModel.vaultDirectoryURL.path)
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(DesignSystem.Colors.textPrimary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .textSelection(.enabled)
+                        
+                        Spacer()
+                        
+                        Button {
+                            NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: viewModel.vaultDirectoryURL.path)
+                        } label: {
+                            Image(systemName: "folder")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Show in Finder")
+                    }
+                    .padding(8)
+                    .background(DesignSystem.Colors.surface)
+                    .cornerRadius(6)
+                    
+                    HStack(spacing: 12) {
+                        Button("Move Vault...") {
+                            let panel = NSOpenPanel()
+                            panel.canChooseFiles = false
+                            panel.canChooseDirectories = true
+                            panel.canCreateDirectories = true
+                            panel.prompt = "Move Vault Here"
+                            panel.message = "Select a new folder to store your vault database and encryption metadata."
+                            
+                            if panel.runModal() == .OK, let url = panel.url {
+                                do {
+                                    try viewModel.moveVault(to: url)
+                                } catch {
+                                    viewModel.errorMessage = "Failed to move vault: \(error.localizedDescription)"
+                                }
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        
+                        Button("Open Existing Vault...") {
+                            let panel = NSOpenPanel()
+                            panel.canChooseFiles = false
+                            panel.canChooseDirectories = true
+                            panel.prompt = "Open Vault"
+                            panel.message = "Select an existing folder that contains a SSHoebox vault.db and vault_metadata.json."
+                            
+                            if panel.runModal() == .OK, let url = panel.url {
+                                viewModel.openExistingVault(at: url)
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .padding(.top, 4)
+                }
+            } header: {
+                Text("Vault Storage")
+                    .foregroundStyle(DesignSystem.Colors.textSecondary)
+            } footer: {
+                Text("Store your vault in a cloud folder (like iCloud Drive or Dropbox) to sync across your Macs.")
+                    .foregroundStyle(DesignSystem.Colors.textSecondary)
+            }
+            
             // Biometric unlock section — only shown if available
             if BiometricAuthManager.isBiometricAvailable() {
                 Section {

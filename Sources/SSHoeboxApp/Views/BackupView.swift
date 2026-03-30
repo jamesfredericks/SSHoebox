@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 struct BackupView: View {
     let dbManager: DatabaseManager
     @StateObject private var backupManager: BackupManager
+    @ObservedObject var vaultViewModel: VaultViewModel
     
     @State private var showingExporter = false
     @State private var showingImporter = false
@@ -17,8 +18,9 @@ struct BackupView: View {
     @AppStorage("backupFolder") private var backupFolder: String = "No folder selected"
     @State private var lastBackupDate = "Never"
     
-    init(dbManager: DatabaseManager) {
+    init(dbManager: DatabaseManager, vaultViewModel: VaultViewModel) {
         self.dbManager = dbManager
+        self.vaultViewModel = vaultViewModel
         _backupManager = StateObject(wrappedValue: BackupManager(dbManager: dbManager))
     }
     
@@ -142,8 +144,10 @@ struct BackupView: View {
         do {
             let data = try Data(contentsOf: url)
             try backupManager.restore(from: data)
-            alertMessage = "Vault restored successfully. Please restart the app for changes to take effect."
-            showingAlert = true
+            // Lock the vault so the user re-enters their password.
+            // This forces the app to re-derive the vault key from the
+            // freshly-restored Keychain salt, fixing the garbage-data issue.
+            vaultViewModel.lock()
         } catch {
             errorMessage = "Restore failed: \(error.localizedDescription)"
         }

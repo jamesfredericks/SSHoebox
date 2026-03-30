@@ -80,7 +80,7 @@ struct HostListView: View {
             // Host cards
             ForEach(section.hosts) { host in
                 NavigationLink {
-                    HostDetailView(host: host, dbManager: dbManager, vaultKey: vaultKey)
+                    HostDetailView(host: host, dbManager: dbManager, vaultKey: vaultKey, hostsViewModel: viewModel)
                 } label: {
                     HostCard(host: host, vaultKey: vaultKey)
                 }

@@ -10,7 +10,7 @@ struct HostDetailView: View {
     let dbManager: DatabaseManager
     let vaultKey: SymmetricKey
     @StateObject private var viewModel: CredentialsViewModel
-    @StateObject private var hostsViewModel: HostsViewModel
+    @ObservedObject private var hostsViewModel: HostsViewModel
     @State private var showingAddCredential = false
     @State private var showingEditHost = false
     @State private var showingDeleteAlert = false
@@ -22,12 +22,12 @@ struct HostDetailView: View {
         case credentials, terminal
     }
     
-    init(host: SavedHost, dbManager: DatabaseManager, vaultKey: SymmetricKey) {
+    init(host: SavedHost, dbManager: DatabaseManager, vaultKey: SymmetricKey, hostsViewModel: HostsViewModel) {
         self.host = host
         self.dbManager = dbManager
         self.vaultKey = vaultKey
         _viewModel = StateObject(wrappedValue: CredentialsViewModel(dbManager: dbManager, vaultKey: vaultKey, hostId: host.id))
-        _hostsViewModel = StateObject(wrappedValue: HostsViewModel(dbManager: dbManager, vaultKey: vaultKey))
+        _hostsViewModel = ObservedObject(wrappedValue: hostsViewModel)
     }
     
     var body: some View {

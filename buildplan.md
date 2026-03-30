@@ -32,8 +32,9 @@ This document is written so an AI/dev can implement the app with clear boundarie
 - **Language/UI**: Swift + SwiftUI (preferred), AppKit bridging where needed.
 - **Crypto**: Apple CryptoKit for primitives + audited implementations for KDF if needed.
 - **Secure storage**:
-  - Master key material protected with **Keychain** + user master password.
-  - Encrypted DB file stored in `Application Support/<bundle-id>/vault.db`.
+  - Master key material protected with strong KDF (PBKDF2-HMAC-SHA256).
+  - Cryptographic metadata (salt and validation token) stored in a portable `vault_metadata.json` sidecar file to support cloud syncing. Touch ID biometric keys are stored in the Secure Enclave via Keychain.
+  - Encrypted DB file stored by default in `Application Support/<bundle-id>/vault.db` or a user-selected cloud directory.
 - **Networking**:
   - Cloud backup: URLSession.
   - SSH: prefer **libssh2** wrapper OR a Swift SSH library (choose based on maturity).
@@ -123,13 +124,12 @@ This document is written so an AI/dev can implement the app with clear boundarie
 
 ### 5.4 Key Storage
 - Store only:
-  - KDF parameters + salt (safe to store)
-  - An encrypted “keycheck” blob to verify password without decrypting everything.
+  - KDF parameters + salt (safe to store, currently written to a portable `vault_metadata.json` sidecar file alongside the database to support cloud syncing between Macs).
+  - An encrypted “keycheck” validation blob to verify password without decrypting everything (also stored in the sidecar file).
 - When user unlocks:
-  - Master password → KDF → Master Key → VEK
-- Use **Keychain** to store:
-  - Optional “quick unlock” token protected by biometrics (Touch ID) and Secure Enclave policies (if desired).
-  - Never store master password.
+  - Master password + salt from `vault_metadata.json` → KDF → Master Key → VEK
+- Use **Keychain / Secure Enclave** strictly to store:
+  - The Symmetric Key for biometric unlock (Touch ID/Face ID). The salt/validation payloads strictly remain in the sidecar file to keep the vault inherently portable across devices.
 
 ### 5.5 Memory/Logging Hygiene
 - Mark secret fields as sensitive; do not print them.

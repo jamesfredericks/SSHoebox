@@ -34,7 +34,7 @@ final class BackupTests: XCTestCase {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let backup = try decoder.decode(VaultBackup.self, from: backupData)
-        XCTAssertEqual(backup.version, 1)
+        XCTAssertEqual(backup.version, 2)
         XCTAssertFalse(backup.checksum.isEmpty)
         
         // 4. Wipe DB (conceptually - here we just verify restore overwrites)

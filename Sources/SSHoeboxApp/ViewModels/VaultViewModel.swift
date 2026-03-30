@@ -37,12 +37,25 @@ class VaultViewModel: ObservableObject {
     private var idleMonitor: IdleMonitor?
     private var cancellables = Set<AnyCancellable>()
     
-    // Path to the vault database
-    private var dbPath: String {
+    // Path to the vault directory
+    var vaultDirectoryURL: URL {
+        if let savedPath = UserDefaults.standard.string(forKey: "vaultDirectoryRaw") {
+            let url = URL(fileURLWithPath: savedPath)
+            try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            return url
+        }
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let appDir = appSupport.appendingPathComponent("com.sshoebox.app")
         try? FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)
-        return appDir.appendingPathComponent("vault.db").path
+        return appDir
+    }
+    
+    var dbPath: String {
+        vaultDirectoryURL.appendingPathComponent("vault.db").path
+    }
+    
+    private var metadataPath: String {
+        vaultDirectoryURL.appendingPathComponent("vault_metadata.json").path
     }
     
     init() {
@@ -50,9 +63,25 @@ class VaultViewModel: ObservableObject {
     }
     
     func checkIfVaultExists() {
-        // Simple check: does the DB file exist?
-        // In a real app we might verify keychain item existence too.
-        isNewUser = !FileManager.default.fileExists(atPath: dbPath)
+        let dbExists = FileManager.default.fileExists(atPath: dbPath)
+        let metadataExists = FileManager.default.fileExists(atPath: metadataPath)
+        let keychainOK = (try? KeychainManager.read(account: "vault_metadata")) != nil
+        
+        // Treat as new user if there is no DB, OR if the metadata is missing from BOTH sidecar AND Keychain.
+        isNewUser = !dbExists || (!metadataExists && !keychainOK)
+    }
+    
+    /// Wipes the existing vault and Keychain entry so the user can start fresh.
+    func forceNewVault() {
+        try? FileManager.default.removeItem(atPath: dbPath)
+        try? FileManager.default.removeItem(atPath: metadataPath)
+        try? KeychainManager.delete(account: "vault_metadata")
+        BiometricAuthManager.revokeBiometric()
+        self.dbManager = nil
+        self.vaultKey = nil
+        self.isUnlocked = false
+        self.isNewUser = true
+        self.errorMessage = nil
     }
     
     func createVault(password: String) {
@@ -60,24 +89,11 @@ class VaultViewModel: ObservableObject {
             let salt = try CryptoManager.generateSalt()
             let key = try CryptoManager.deriveKey(password: password, salt: salt)
             
-            // Save salt to Keychain or separate header file. 
-            // For v1 simplicity, we'll store a "validation hash" in Keychain to verify password quickly,
-            // and we might need to store the salt. 
-            // Actually, best practice: store salt in the DB header or a sidecar config file. 
-            // Let's store salt in Keychain for now alongside a validation token.
-            
-            // 1. Create DB
-            let manager = try DatabaseManager(path: dbPath)
-            self.dbManager = manager
-            self.vaultKey = key
-            
-            // 2. Persist Salt & Validation
-            // Validation: Encrypt a known constant "valid" with the key. If we can decrypt it later, key is good.
+            // Save metadata to portable JSON sidecar instead of Keychain
             let validationData = try CryptoManager.encrypt("SSHOEBOX_VALID".data(using: .utf8)!, using: key)
-            
             let vaultMetadata = VaultMetadata(salt: salt, validation: validationData, version: 1)
             let metadataData = try JSONEncoder().encode(vaultMetadata)
-            try KeychainManager.save(metadataData, account: "vault_metadata")
+            try metadataData.write(to: URL(fileURLWithPath: metadataPath))
             
             self.isUnlocked = true
             self.isNewUser = false
@@ -93,8 +109,17 @@ class VaultViewModel: ObservableObject {
     
     func unlock(password: String) {
         do {
-            // 1. Retrieve Salt & Validation from Keychain
-            let metadataData = try KeychainManager.read(account: "vault_metadata")
+            // 1. Retrieve Salt & Validation from Sidecar (or fallback to Keychain)
+            let metadataData: Data
+            if FileManager.default.fileExists(atPath: metadataPath) {
+                // Portable Vault Sidecar
+                metadataData = try Data(contentsOf: URL(fileURLWithPath: metadataPath))
+            } else {
+                // Legacy Keychain Migration
+                metadataData = try KeychainManager.read(account: "vault_metadata")
+                try metadataData.write(to: URL(fileURLWithPath: metadataPath))
+            }
+            
             let metadata = try JSONDecoder().decode(VaultMetadata.self, from: metadataData)
             
             // 2. Derive Key
@@ -119,7 +144,7 @@ class VaultViewModel: ObservableObject {
                 var newMetadata = metadata
                 newMetadata.version = 1
                 let newMetadataData = try JSONEncoder().encode(newMetadata)
-                try KeychainManager.save(newMetadataData, account: "vault_metadata")
+                try newMetadataData.write(to: URL(fileURLWithPath: metadataPath))
             }
             
             self.isUnlocked = true
@@ -151,7 +176,13 @@ class VaultViewModel: ObservableObject {
                 let key = try await BiometricAuthManager.unlockWithBiometrics()
                 
                 // Validate the key against the stored validation token
-                let metadataData = try KeychainManager.read(account: "vault_metadata")
+                let metadataData: Data
+                if FileManager.default.fileExists(atPath: metadataPath) {
+                    metadataData = try Data(contentsOf: URL(fileURLWithPath: metadataPath))
+                } else {
+                    metadataData = try KeychainManager.read(account: "vault_metadata")
+                }
+                
                 let metadata = try JSONDecoder().decode(VaultMetadata.self, from: metadataData)
                 let decryptedValidation = try CryptoManager.decrypt(metadata.validation, using: key)
                 guard let validationString = String(data: decryptedValidation, encoding: .utf8),
@@ -292,15 +323,56 @@ class VaultViewModel: ObservableObject {
     }
     
     func resetApp() {
-        // Delete DB
+        // Delete DB and Sidecar
         try? FileManager.default.removeItem(atPath: dbPath)
+        try? FileManager.default.removeItem(atPath: metadataPath)
         
-        // Delete Keychain Item
+        // Delete Keychain Item (legacy)
         try? KeychainManager.delete(account: "vault_metadata")
         
         self.lock()
         self.checkIfVaultExists()
         self.errorMessage = nil
+    }
+    
+    // MARK: - Portable Vault Management
+    
+    func moveVault(to url: URL) throws {
+        // Ensure folder exists
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        
+        let newDbURL = url.appendingPathComponent("vault.db")
+        let newMetadataURL = url.appendingPathComponent("vault_metadata.json")
+        
+        let oldDbURL = URL(fileURLWithPath: dbPath)
+        let oldMetadataURL = URL(fileURLWithPath: metadataPath)
+        
+        self.lock()
+        
+        if FileManager.default.fileExists(atPath: oldDbURL.path) {
+            // Need to handle rewriting if exists
+            if FileManager.default.fileExists(atPath: newDbURL.path) {
+                try FileManager.default.removeItem(at: newDbURL)
+            }
+            try FileManager.default.moveItem(at: oldDbURL, to: newDbURL)
+        }
+        
+        if FileManager.default.fileExists(atPath: oldMetadataURL.path) {
+            if FileManager.default.fileExists(atPath: newMetadataURL.path) {
+                try FileManager.default.removeItem(at: newMetadataURL)
+            }
+            try FileManager.default.moveItem(at: oldMetadataURL, to: newMetadataURL)
+        }
+        
+        // Save new setting
+        UserDefaults.standard.set(url.path, forKey: "vaultDirectoryRaw")
+        checkIfVaultExists()
+    }
+    
+    func openExistingVault(at url: URL) {
+        self.lock()
+        UserDefaults.standard.set(url.path, forKey: "vaultDirectoryRaw")
+        checkIfVaultExists()
     }
     
     // MARK: - SSH Agent Management

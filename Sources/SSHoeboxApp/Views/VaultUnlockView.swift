@@ -5,6 +5,7 @@ struct VaultUnlockView: View {
     @ObservedObject var viewModel: VaultViewModel
     @State private var password = ""
     @State private var confirmPassword = ""
+    @State private var showingNewVaultConfirm = false
     
     var body: some View {
         ZStack {
@@ -70,6 +71,16 @@ struct VaultUnlockView: View {
                         .buttonStyle(.bordered)
                         .tint(DesignSystem.Colors.accent)
                     }
+                    
+                    // Recovery option — shown on unlock screen only
+                    if !viewModel.isNewUser {
+                        Button("Create New Vault…") {
+                            showingNewVaultConfirm = true
+                        }
+                        .font(.caption)
+                        .foregroundStyle(DesignSystem.Colors.textSecondary)
+                        .buttonStyle(.plain)
+                    }
                 }
                 
                 if viewModel.isNewUser {
@@ -90,6 +101,16 @@ struct VaultUnlockView: View {
             if !viewModel.isNewUser && viewModel.isBiometricEnrolled {
                 viewModel.unlockWithBiometrics()
             }
+        }
+        .alert("Create New Vault?", isPresented: $showingNewVaultConfirm) {
+            Button("Cancel", role: .cancel) { }
+            Button("Delete & Create New", role: .destructive) {
+                password = ""
+                confirmPassword = ""
+                viewModel.forceNewVault()
+            }
+        } message: {
+            Text("This will permanently delete your existing vault and all stored hosts and credentials. This cannot be undone.")
         }
     }
     
