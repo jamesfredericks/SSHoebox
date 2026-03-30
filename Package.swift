@@ -28,7 +28,11 @@ let package = Package(
                 .product(name: "GRDB", package: "GRDB.swift"),
                 .product(name: "Citadel", package: "Citadel"),
             ],
-            path: "Sources/Core"
+            path: "Sources/Core",
+            swiftSettings: [
+                .define("SQLITE_HAS_CODEC"),
+                .define("GRDB_SQLCIPHER")
+            ]
         ),
         .executableTarget(
             name: "SSHoeboxApp",
