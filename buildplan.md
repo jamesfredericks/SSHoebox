@@ -288,13 +288,11 @@ Cloud sees only ciphertext. Decryption keys never leave device.
   - Profiles (per host or global)
   - Theme selection (color palette, font, prompt style)
 - Implementation approach:
-  - Spawn local shell via PTY (zsh/bash)
-  - Provide “Connect to host” actions:
-    - Use OS `ssh` binary with safe argument passing OR library-based SSH session.
+  - Spawn remote shell via SSH natively embedded (`SwiftTerm` + `Citadel`).
+  - SFTP and remote commands execute within the identical SSH session context to guarantee no external macOS Terminal scripting is needed.
 - Secret handling:
-  - Never inject passwords directly into terminal input by default.
-  - Prefer key-based auth or user paste from clipboard.
-  - Optionally provide a “one-time paste” helper with warnings.
+  - Cryptographic keys and passwords are sent directly into the in-memory SSH/SFTP connection buffer.
+  - Terminals rely on native Swift APIs (`Citadel`). Passwords are never placed on disk or inside `expect` temporary scripts.
 
 ### Theme Packs
 - Stored as JSON:

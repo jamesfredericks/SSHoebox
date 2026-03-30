@@ -17,9 +17,10 @@ SSHoebox is a secure, native macOS application for managing SSH and SFTP connect
   - "Copy to Clipboard" with auto-clear warnings (UI indicator)
 
 - **Embedded Shell**:
-  - Fully functional embedded local terminal (zsh/bash)
+  - Fully functional embedded remote terminal (`SwiftTerm` + `Citadel`)
+  - **Zero-Disk Security**: All authentication is handled in-memory. No plaintext scripts or passwords ever touch the disk.
   - Customizable themes (Matrix, Ocean, Sunset, Deep Space)
-  - Auto-injection of connection commands
+  - Unified protocol support: SSH and SFTP sessions both run directly in the internal tab.
 
 - **Tools**:
   - **Password Generator**: Create strong, random passwords or passphrases (Bitwarden-style)
@@ -102,8 +103,9 @@ See [Distribution Guide](docs/DISTRIBUTION.md) for more details.
 SSHoebox takes security seriously:
 - All credentials are encrypted at rest using AES-256-GCM
 - Master password is never stored, only a derived key
-- Database is encrypted with SQLCipher
-- Touch ID / Face ID unlock uses a biometric-gated keychain item — your vault key is never exposed without fingerprint confirmation
+- **In-Memory Authentication**: Unlike other managers that use temporary scripts, SSHoebox handles all terminal logins in-memory. Your passwords never touch the disk in plaintext.
+- Database uses field-level encryption for all sensitive metadata
+- Touch ID / Face ID unlock uses a biometric-gated keychain item
 - No telemetry or external network requests
 
 For security concerns, please see [SECURITY.md](SECURITY.md) (if you plan to add one).
