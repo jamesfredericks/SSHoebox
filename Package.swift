@@ -14,8 +14,8 @@ let package = Package(
             targets: ["SSHoeboxApp"]),
     ],
     dependencies: [
-        // Using GRDB.swift with SQLCipher support
-        .package(url: "https://github.com/groue/GRDB.swift.git", from: "6.29.3"),
+        // Using our locally-vendored GRDB.swift with SQLCipher support enabled
+        .package(path: "Vendor/GRDB"),
         // Terminal emulator UI
         .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.2.0"),
         // SSH protocol client
@@ -25,7 +25,7 @@ let package = Package(
         .target(
             name: "SSHoeboxCore",
             dependencies: [
-                .product(name: "GRDB", package: "GRDB.swift"),
+                .product(name: "GRDB", package: "GRDB"),
                 .product(name: "Citadel", package: "Citadel"),
             ],
             path: "Sources/Core"
