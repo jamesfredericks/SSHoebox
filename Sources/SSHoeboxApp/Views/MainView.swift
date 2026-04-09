@@ -2,18 +2,35 @@ import SwiftUI
 import AppKit
 import SSHoeboxCore
 
-// Removes the thin separator line macOS draws between the toolbar and window content.
-private struct TitlebarSeparatorRemover: NSViewRepresentable {
+// Removes the thin separator line macOS draws between the toolbar and window content,
+// and hides the NSVisualEffectView card that NavigationSplitView injects behind the sidebar.
+private struct WindowStyler: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
-        DispatchQueue.main.async {
-            view.window?.titlebarSeparatorStyle = .none
-        }
+        DispatchQueue.main.async { Self.apply(from: view) }
         return view
     }
     func updateNSView(_ nsView: NSView, context: Context) {
-        DispatchQueue.main.async {
-            nsView.window?.titlebarSeparatorStyle = .none
+        DispatchQueue.main.async { Self.apply(from: nsView) }
+    }
+
+    private static func apply(from view: NSView) {
+        view.window?.titlebarSeparatorStyle = .none
+
+        // Walk up to the NSSplitView that backs NavigationSplitView
+        var v: NSView? = view
+        while let current = v {
+            if current is NSSplitView {
+                // First subview of NSSplitView = sidebar column container
+                if let sidebarContainer = current.subviews.first {
+                    // Hide only the direct NSVisualEffectView children (the card background)
+                    for sub in sidebarContainer.subviews where sub is NSVisualEffectView {
+                        sub.isHidden = true
+                    }
+                }
+                return
+            }
+            v = current.superview
         }
     }
 }
@@ -116,7 +133,7 @@ struct MainView: View {
         .toolbarBackground(DesignSystem.Colors.background, for: .windowToolbar)
         .toolbarBackground(.visible, for: .windowToolbar)
         .preferredColorScheme(themeManager.currentTheme.colorScheme)
-        .background(TitlebarSeparatorRemover())
+        .background(WindowStyler())
         .onAppear {
             let registry = sessionRegistry
             viewModel.activeSessionCount = { registry.totalActiveConnections }
