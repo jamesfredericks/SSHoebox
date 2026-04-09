@@ -94,6 +94,9 @@ struct MainView: View {
                 }
             }
         }
+        .toolbarBackground(DesignSystem.Colors.background, for: .windowToolbar)
+        .toolbarBackground(.visible, for: .windowToolbar)
+        .preferredColorScheme(themeManager.currentTheme.colorScheme)
         .onAppear {
             let registry = sessionRegistry
             viewModel.activeSessionCount = { registry.totalActiveConnections }
