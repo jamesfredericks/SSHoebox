@@ -15,19 +15,25 @@ SSHoebox is a secure, native macOS application for managing SSH and SFTP connect
 - **Password history** — previous secrets are archived when a credential is updated, reviewable and copyable at any time
 
 ### Connection Manager
-- Organize hosts into groups; store passwords and SSH private keys per host
+- Organize hosts into collapsible groups; store passwords and SSH private keys per host
+- **Host search** — instant filtering across host name, hostname, and username
+- **Connection history** — each host card shows when you last connected (e.g. "2 hours ago")
 - **TOFU host key verification** — trust-on-first-use fingerprints stored in a local known-hosts database; detects key changes and alerts you
 - One-click SSH and SFTP connection launching
 - **Clipboard auto-clear** — copied secrets are cleared from the clipboard after a configurable delay (default 30 s); an in-app badge counts down and offers a manual clear
+- **SSH key generation** — generate Ed25519 key pairs in-app; private key saved as a credential, public key ready to copy to your server
+- **Import from ~/.ssh/config** — parse your existing SSH config and import selected hosts in one click
+- **Import from CSV or Bitwarden** — bulk-import hosts and passwords from a CSV file or a Bitwarden JSON export
 
 ### Embedded Terminal
 - Fully functional embedded remote terminal (`SwiftTerm` + `Citadel`)
 - Multi-tab support — open multiple sessions to the same host simultaneously
 - **Zero-disk security** — all authentication is handled in-memory; no plaintext passwords or scripts ever touch disk
 - Automatic reconnect overlay when a session drops
-- Customizable themes (Matrix, Ocean, Sunset, Deep Space)
+- Customizable themes (Matrix, Ocean, Sunset, Deep Space, Nature, Glacier)
 - Supports password auth, Ed25519 key auth, RSA key auth, and keyboard-interactive (YubiKey / MFA)
 - **Encrypted key passphrase support** — passphrase-protected private keys prompt inline without exposing the passphrase
+- **Adjustable font size** — `⌘+` / `⌘−` keyboard shortcuts, +/− buttons in the tab bar, or the Preferences stepper
 
 ### SFTP File Browser
 - Full file browser with breadcrumb path navigation
@@ -41,6 +47,11 @@ SSHoebox is a secure, native macOS application for managing SSH and SFTP connect
 - Serves all vault key credentials automatically when the vault is unlocked
 - Full RSA SHA-2 support (`rsa-sha2-256`, `rsa-sha2-512`) — compatible with OpenSSH 8.8+
 - Auto-starts on unlock; stops on lock
+
+### Menu Bar
+- Persistent menu bar icon shows vault status at a glance
+- Displays active session count when connections are open
+- Quick actions: open the main window, lock the vault, or quit
 
 ### Tools
 - **Password Generator** — random passwords or passphrases (Bitwarden-style); configurable length, character sets, separators, and ambiguous-character avoidance
@@ -67,7 +78,7 @@ sudo cp -r dist/SSHoebox.app /Applications/
 
 ### Option 2: Pre-built Binary
 
-1. Download the latest `SSHoebox-v2.2.1.zip` from [Releases](https://github.com/jamesfredericks/SSHoebox/releases)
+1. Download the latest `SSHoebox-v2.3.0.zip` from [Releases](https://github.com/jamesfredericks/SSHoebox/releases)
 2. Unzip and move `SSHoebox.app` to `/Applications`
 3. Remove the quarantine flag (required for ad-hoc–signed binaries):
    ```bash
