@@ -110,10 +110,29 @@ public struct DatabaseManager {
                 t.column("sortOrder", .integer).notNull().defaults(to: 0)
                 t.column("createdAt", .datetime).notNull()
             }
-            
+
             try db.alter(table: "host") { t in
                 t.add(column: "groupId", .text).references("hostGroup", onDelete: .setNull)
             }
+        }
+
+        migrator.registerMigration("v4") { db in
+            try db.create(table: "knownHost") { t in
+                t.column("id", .text).primaryKey()
+                t.column("hostname", .text).notNull()
+                t.column("port", .integer).notNull()
+                t.column("keyType", .text).notNull()
+                t.column("keyFingerprint", .text).notNull()
+                t.column("openSSHPublicKey", .text).notNull()
+                t.column("firstSeenAt", .datetime).notNull()
+            }
+            // Enforce one trusted key per hostname:port pair
+            try db.create(
+                index: "knownHost_hostname_port",
+                on: "knownHost",
+                columns: ["hostname", "port"],
+                unique: true
+            )
         }
 
         return migrator

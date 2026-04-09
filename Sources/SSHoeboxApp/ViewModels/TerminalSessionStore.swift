@@ -59,6 +59,7 @@ class TerminalSessionStore: ObservableObject {
         credentialsViewModel.fetchCredentials()
 
         let manager = SSHSessionManager()
+        manager.knownHostRepository = KnownHostRepository(dbManager: dbManager)
         let sessionNumber = sessions.count + 1
         let session = TerminalSession(
             id: UUID(),

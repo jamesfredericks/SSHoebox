@@ -43,10 +43,14 @@ public class SSHSessionManager: ObservableObject {
         }
     }
     
+    /// Set before calling connect to enable TOFU host key validation.
+    /// When nil the session falls back to accepting any key (legacy behaviour).
+    public var knownHostRepository: KnownHostRepository?
+
     public init() {}
-    
+
     // MARK: - Connect (Password)
-    
+
     public func connect(
         host: String,
         port: Int = 22,
@@ -54,14 +58,15 @@ public class SSHSessionManager: ObservableObject {
         password: String,
         terminalSize: (cols: Int, rows: Int) = (80, 24)
     ) async {
+        let (validator, capturer) = buildValidator(for: host, port: port)
         var settings = SSHClientSettings(
             host: host,
             port: port,
             authenticationMethod: { .passwordBased(username: username, password: password) },
-            hostKeyValidator: .acceptAnything()
+            hostKeyValidator: validator
         )
         settings.algorithms = .all
-        await startSession(settings: settings, terminalSize: terminalSize)
+        await startSession(settings: settings, terminalSize: terminalSize, capturer: capturer)
     }
 
     // MARK: - Connect (Ed25519 Key)
@@ -73,14 +78,15 @@ public class SSHSessionManager: ObservableObject {
         ed25519Key: Curve25519.Signing.PrivateKey,
         terminalSize: (cols: Int, rows: Int) = (80, 24)
     ) async {
+        let (validator, capturer) = buildValidator(for: host, port: port)
         var settings = SSHClientSettings(
             host: host,
             port: port,
             authenticationMethod: { .ed25519(username: username, privateKey: ed25519Key) },
-            hostKeyValidator: .acceptAnything()
+            hostKeyValidator: validator
         )
         settings.algorithms = .all
-        await startSession(settings: settings, terminalSize: terminalSize)
+        await startSession(settings: settings, terminalSize: terminalSize, capturer: capturer)
     }
 
     // MARK: - Connect (Interactive / YubiKey)
@@ -91,16 +97,42 @@ public class SSHSessionManager: ObservableObject {
         username: String,
         terminalSize: (cols: Int, rows: Int) = (80, 24)
     ) async {
+        let (validator, capturer) = buildValidator(for: host, port: port)
         let delegate = KeyboardInteractiveDelegate(username: username)
         delegate.onOutput = self.onOutput
         var settings = SSHClientSettings(
             host: host,
             port: port,
             authenticationMethod: { .custom(delegate) },
-            hostKeyValidator: .acceptAnything()
+            hostKeyValidator: validator
         )
         settings.algorithms = .all
-        await startSession(settings: settings, terminalSize: terminalSize)
+        await startSession(settings: settings, terminalSize: terminalSize, capturer: capturer)
+    }
+
+    // MARK: - Host Key Validation (TOFU)
+
+    /// Builds an `SSHHostKeyValidator` for the given host.
+    ///
+    /// - If a known host record exists in the repository, returns `.trustedKeys` using
+    ///   the stored key. The connection will fail with `InvalidHostKey` if the server
+    ///   presents a different key.
+    /// - If no record exists, returns a `CapturingHostKeyValidator` that trusts the
+    ///   first-seen key. The caller is responsible for persisting the captured key after
+    ///   the connection succeeds (see `startSession`).
+    private func buildValidator(
+        for host: String,
+        port: Int
+    ) -> (SSHHostKeyValidator, CapturingHostKeyValidator?) {
+        guard let repo = knownHostRepository else {
+            return (.acceptAnything(), nil)
+        }
+        if let knownHost = try? repo.find(hostname: host, port: port),
+           let storedKey = try? NIOSSHPublicKey(openSSHPublicKey: knownHost.openSSHPublicKey) {
+            return (.trustedKeys([storedKey]), nil)
+        }
+        let capturer = CapturingHostKeyValidator()
+        return (.custom(capturer), capturer)
     }
     
     public func log(_ msg: String, color: String = "36") {
@@ -117,19 +149,44 @@ public class SSHSessionManager: ObservableObject {
     
     private func startSession(
         settings: SSHClientSettings,
-        terminalSize: (cols: Int, rows: Int)
+        terminalSize: (cols: Int, rows: Int),
+        capturer: CapturingHostKeyValidator? = nil
     ) async {
         await MainActor.run { connectionState = .connecting }
-        
+
+        // Snapshot repo reference for use inside the Task (avoids actor isolation issues)
+        let repoSnapshot = knownHostRepository
+
         // Create stdin stream
         let (stdinStream, stdinContinuation) = AsyncStream<Data>.makeStream()
         self.stdinContinuation = stdinContinuation
-        
+
         sessionTask = Task { [weak self] in
             guard let self else { return }
             do {
                 await MainActor.run { self.log("Connecting to \(settings.host):\(settings.port)...") }
                 let sshClient = try await SSHClient.connect(to: settings)
+
+                // If this was a first-time connection, persist the captured key and log the fingerprint.
+                // validateHostKey fires before SSHClient.connect returns, so capturedKey is set here.
+                if let capturedKey = capturer?.capturedKey, let repo = repoSnapshot {
+                    let fingerprint = sshFingerprint(for: capturedKey)
+                    let openSSHStr = String(openSSHPublicKey: capturedKey)
+                    let keyType = String(openSSHStr.split(separator: " ").first ?? "unknown")
+                    let knownHost = KnownHost(
+                        hostname: settings.host,
+                        port: settings.port,
+                        keyType: keyType,
+                        keyFingerprint: fingerprint,
+                        openSSHPublicKey: openSSHStr
+                    )
+                    try? repo.save(knownHost)
+                    await MainActor.run {
+                        self.log("New host key stored (Trust On First Use).", color: "32")
+                        self.log("  Type:        \(keyType)", color: "32")
+                        self.log("  Fingerprint: \(fingerprint)", color: "32")
+                    }
+                }
                 await MainActor.run { 
                     self.client = sshClient
                     self.log("TCP Connected & Authenticated.", color: "32")
@@ -189,6 +246,18 @@ public class SSHSessionManager: ObservableObject {
                 }
                 
                 
+            } catch is InvalidHostKey {
+                await MainActor.run {
+                    self.log("", color: "31")
+                    self.log("⚠  WARNING: HOST KEY VERIFICATION FAILED", color: "31")
+                    self.log("The server presented a key that does not match the trusted key on record.", color: "31")
+                    self.log("This may indicate a man-in-the-middle attack or a server reinstall.", color: "33")
+                    self.log("If you trust this change, remove the host from Preferences → Known Hosts,", color: "33")
+                    self.log("then reconnect to store the new key.", color: "33")
+                    self.log("", color: "31")
+                    self.connectionState = .failed("Host key mismatch")
+                    self.onDisconnect?()
+                }
             } catch {
                 await MainActor.run {
                     let detailedError = String(describing: error)
