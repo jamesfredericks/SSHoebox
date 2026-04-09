@@ -14,8 +14,8 @@ let package = Package(
             targets: ["SSHoeboxApp"]),
     ],
     dependencies: [
-        // Using our locally-vendored GRDB.swift with SQLCipher support enabled
-        .package(path: "Vendor/GRDB"),
+        // GRDB fork with SQLCipher pre-enabled (SQLITE_HAS_CODEC compiled into the module)
+        .package(url: "https://github.com/mezhevikin/GRDB.SQLCipher.swift.git", revision: "2319bce6657900130cf1e1e95779f2dcfeeb85b0"),
         // Terminal emulator UI
         .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.2.0"),
         // SSH protocol client
@@ -25,14 +25,10 @@ let package = Package(
         .target(
             name: "SSHoeboxCore",
             dependencies: [
-                .product(name: "GRDB", package: "GRDB"),
+                .product(name: "GRDB", package: "GRDB.SQLCipher.swift"),
                 .product(name: "Citadel", package: "Citadel"),
             ],
-            path: "Sources/Core",
-            swiftSettings: [
-                .define("SQLITE_HAS_CODEC"),
-                .define("GRDB_SQLCIPHER")
-            ]
+            path: "Sources/Core"
         ),
         .executableTarget(
             name: "SSHoeboxApp",

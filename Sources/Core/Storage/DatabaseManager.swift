@@ -17,8 +17,8 @@ public struct DatabaseManager {
         }
         
         // Handle migration if the current DB is plaintext but we want encryption
-        if let passphrase = passphrase, FileManager.default.fileExists(atPath: path) && !isDatabaseEncrypted(path: path) {
-            try migrateToEncrypted(at: path, passphrase: passphrase)
+        if let passphrase = passphrase, FileManager.default.fileExists(atPath: path) && !DatabaseManager.isDatabaseEncrypted(path: path) {
+            try DatabaseManager.migrateToEncrypted(at: path, passphrase: passphrase)
         }
         
         self.dbWriter = try DatabaseQueue(path: path, configuration: config)
@@ -38,7 +38,7 @@ public struct DatabaseManager {
     }
     
     /// Checks if a database is currently encrypted by attempting to read it without a key.
-    private func isDatabaseEncrypted(path: String) -> Bool {
+    private static func isDatabaseEncrypted(path: String) -> Bool {
         do {
             let db = try DatabaseQueue(path: path)
             try db.read { db in
@@ -51,7 +51,7 @@ public struct DatabaseManager {
     }
     
     /// Migrates a plaintext database to an encrypted SQLCipher database by exporting to a temporary file.
-    private func migrateToEncrypted(at path: String, passphrase: Data) throws {
+    private static func migrateToEncrypted(at path: String, passphrase: Data) throws {
         let tempPath = path + ".tmp"
         if FileManager.default.fileExists(atPath: tempPath) {
             try FileManager.default.removeItem(atPath: tempPath)
