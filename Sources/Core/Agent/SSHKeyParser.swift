@@ -46,26 +46,36 @@ public struct SSHKeyParser {
 
     // MARK: - Signing
 
-    /// Signs `data` with the private key contained in `pem` and returns an SSH
-    /// agent-protocol signature blob.
+    /// Signs `data` with the private key in `pem` and returns an SSH agent-protocol
+    /// signature blob: `uint32(algo_len) + algo_string + uint32(sig_len) + sig_bytes`
     ///
-    /// Signature blob format (the full blob, without an outer length prefix):
-    /// `uint32(algo_len) + algo_string + uint32(sig_len) + sig_bytes`
-    ///
-    /// - Note: RSA signatures use SHA-1 (ssh-rsa), which is the baseline
-    ///   algorithm mandated by the SSH agent protocol spec. Modern servers
-    ///   prefer rsa-sha2-256 / rsa-sha2-512; that can be added later via flags.
-    public static func sign(pem: String, data: Data) throws -> Data {
-        // Ed25519
+    /// `flags` follows the OpenSSH agent protocol (ssh-agent.h):
+    /// - `0x02` (`SSH_AGENT_RSA_SHA2_256`) → `rsa-sha2-256` (RFC 8332)
+    /// - `0x04` (`SSH_AGENT_RSA_SHA2_512`) → `rsa-sha2-512` (RFC 8332)
+    /// - `0`    (default)                  → `ssh-rsa` (SHA-1, legacy fallback)
+    /// Ed25519 always uses `ssh-ed25519` regardless of flags.
+    public static func sign(pem: String, data: Data, flags: UInt32 = 0) throws -> Data {
+        // Ed25519 — flags are ignored; only one algorithm exists
         if let edKey = try? Curve25519.Signing.PrivateKey(sshEd25519: pem) {
             let sig = try edKey.signature(for: data)
             return signatureBlob(algorithm: "ssh-ed25519", sigBytes: Data(sig))
         }
 
-        // RSA (SHA-1)
+        // RSA — honour the flags for SHA-256/512; fall back to SHA-1
         if let rsaKey = try? Insecure.RSA.PrivateKey(sshRsa: pem) {
-            let sig = try rsaKey.signature(for: data) as Insecure.RSA.Signature
-            return signatureBlob(algorithm: "ssh-rsa", sigBytes: sig.rawRepresentation)
+            if flags & 0x04 != 0 {
+                // rsa-sha2-512
+                let sig = try rsaKey.signatureSHA512(for: data)
+                return signatureBlob(algorithm: "rsa-sha2-512", sigBytes: sig.rawRepresentation)
+            } else if flags & 0x02 != 0 {
+                // rsa-sha2-256
+                let sig = try rsaKey.signatureSHA256(for: data)
+                return signatureBlob(algorithm: "rsa-sha2-256", sigBytes: sig.rawRepresentation)
+            } else {
+                // Legacy ssh-rsa (SHA-1)
+                let sig = try rsaKey.signature(for: data) as Insecure.RSA.Signature
+                return signatureBlob(algorithm: "ssh-rsa", sigBytes: sig.rawRepresentation)
+            }
         }
 
         throw SSHKeyError.unsupportedKeyType

@@ -209,47 +209,48 @@ extension Insecure.RSA {
             )
         }
         
-        public func signature<D: DataProtocol>(for message: D) throws -> Signature {
+        // MARK: - RSA signing
+
+        /// Common PKCS#1 v1.5 signing path — avoids duplicating the BoringSSL setup.
+        private func rsaSign(nid: Int32, hash: [UInt8]) throws -> Signature {
             let context = CCryptoBoringSSL_RSA_new()
             defer { CCryptoBoringSSL_RSA_free(context) }
 
-            // Copy, so that our local `self.modulus` isn't freed by RSA_free
+            // Copy BIGNUMs so RSA_free doesn't free our stored values
             let modulus = CCryptoBoringSSL_BN_new()!
             let publicExponent = CCryptoBoringSSL_BN_new()!
             let privateExponent = CCryptoBoringSSL_BN_new()!
-            
             CCryptoBoringSSL_BN_copy(modulus, self._publicKey.modulus)
             CCryptoBoringSSL_BN_copy(publicExponent, self._publicKey.publicExponent)
             CCryptoBoringSSL_BN_copy(privateExponent, self.privateExponent)
-            guard CCryptoBoringSSL_RSA_set0_key(
-                context,
-                modulus,
-                publicExponent,
-                privateExponent
-            ) == 1 else {
+            guard CCryptoBoringSSL_RSA_set0_key(context, modulus, publicExponent, privateExponent) == 1 else {
                 throw CitadelError.signingError
             }
-            
-            let hash = Array(Insecure.SHA1.hash(data: message))
+
             let out = UnsafeMutablePointer<UInt8>.allocate(capacity: 4096)
             defer { out.deallocate() }
             var outLength: UInt32 = 4096
-            let result = CCryptoBoringSSL_RSA_sign(
-                NID_sha1,
-                hash,
-                Int(hash.count),
-                out,
-                &outLength,
-                context
-            )
-            
-            guard result == 1 else {
+            guard CCryptoBoringSSL_RSA_sign(nid, hash, hash.count, out, &outLength, context) == 1 else {
                 throw CitadelError.signingError
             }
-            
             return Signature(rawRepresentation: Data(bytes: out, count: Int(outLength)))
         }
-        
+
+        /// PKCS#1 v1.5 + SHA-1 — legacy `ssh-rsa`.
+        public func signature<D: DataProtocol>(for message: D) throws -> Signature {
+            try rsaSign(nid: NID_sha1, hash: Array(Insecure.SHA1.hash(data: message)))
+        }
+
+        /// PKCS#1 v1.5 + SHA-256 — `rsa-sha2-256` (RFC 8332).
+        public func signatureSHA256<D: DataProtocol>(for message: D) throws -> Signature {
+            try rsaSign(nid: NID_sha256, hash: Array(SHA256.hash(data: message)))
+        }
+
+        /// PKCS#1 v1.5 + SHA-512 — `rsa-sha2-512` (RFC 8332).
+        public func signatureSHA512<D: DataProtocol>(for message: D) throws -> Signature {
+            try rsaSign(nid: NID_sha512, hash: Array(SHA512.hash(data: message)))
+        }
+
         public func signature<D>(for data: D) throws -> NIOSSHSignatureProtocol where D : DataProtocol {
             return try self.signature(for: data) as Signature
         }

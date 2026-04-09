@@ -70,9 +70,10 @@ extension VaultViewModel: SSHAgentDelegate {
             // Match the requested key blob against this credential's public key
             guard SSHKeyParser.publicKeyBlobMatches(blob: key, pem: pem) else { continue }
 
-            // Found the matching key — sign and return
-            print("SSH Agent: signing with key for \(cred.username)")
-            return try SSHKeyParser.sign(pem: pem, data: data)
+            // Found the matching key — sign and return, honouring RSA SHA-2 flags
+            let algo = flags & 0x04 != 0 ? "rsa-sha2-512" : flags & 0x02 != 0 ? "rsa-sha2-256" : "ssh-rsa/ed25519"
+            print("SSH Agent: signing with key for \(cred.username) (flags=\(flags), algo hint=\(algo))")
+            return try SSHKeyParser.sign(pem: pem, data: data, flags: flags)
         }
 
         // No matching key found
