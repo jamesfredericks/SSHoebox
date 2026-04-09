@@ -80,6 +80,14 @@ class TerminalSessionStore: ObservableObject {
         sessions.append(session)
         selectedSessionId = session.id
 
+        let hostId = host.id
+        let db = dbManager
+        manager.onConnected = {
+            Task {
+                try? HostRepository(dbManager: db).updateLastConnected(hostId: hostId)
+            }
+        }
+
         Task {
             await connectSession(manager: manager)
         }

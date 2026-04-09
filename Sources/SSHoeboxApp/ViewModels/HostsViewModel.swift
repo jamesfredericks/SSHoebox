@@ -8,6 +8,8 @@ class HostsViewModel: ObservableObject {
     @Published var hosts: [SavedHost] = []
     @Published var groups: [HostGroup] = []
     @Published var errorMessage: String?
+    @Published var searchQuery: String = ""
+    @Published var collapsedGroups: Set<String> = []
 
     private let dbManager: DatabaseManager
     private let repository: HostRepository
@@ -39,22 +41,42 @@ class HostsViewModel: ObservableObject {
     // MARK: - Grouped Hosts
 
     /// Returns hosts arranged by group (in sort order), with ungrouped hosts last.
+    /// Filtered by searchQuery when non-empty.
     var hostsGrouped: [(group: HostGroup?, hosts: [SavedHost])] {
+        let filtered = filteredHosts
         var result: [(group: HostGroup?, hosts: [SavedHost])] = []
 
         for group in groups {
-            let members = hosts.filter { $0.groupId == group.id }
+            let members = filtered.filter { $0.groupId == group.id }
             if !members.isEmpty {
                 result.append((group: group, hosts: members))
             }
         }
 
-        let ungrouped = hosts.filter { $0.groupId == nil }
+        let ungrouped = filtered.filter { $0.groupId == nil }
         if !ungrouped.isEmpty {
             result.append((group: nil, hosts: ungrouped))
         }
 
         return result
+    }
+
+    private var filteredHosts: [SavedHost] {
+        guard !searchQuery.trimmingCharacters(in: .whitespaces).isEmpty else { return hosts }
+        let q = searchQuery.lowercased()
+        return hosts.filter { host in
+            host.name.lowercased().contains(q) ||
+            host.hostname.lowercased().contains(q) ||
+            host.user.lowercased().contains(q)
+        }
+    }
+
+    func toggleCollapse(groupId: String) {
+        if collapsedGroups.contains(groupId) {
+            collapsedGroups.remove(groupId)
+        } else {
+            collapsedGroups.insert(groupId)
+        }
     }
 
     // MARK: - Host CRUD

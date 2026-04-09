@@ -252,6 +252,17 @@ struct PreferencesView: View {
                 }
                 .pickerStyle(.inline)
                 .labelsHidden()
+
+                HStack {
+                    Text("Terminal Font Size")
+                        .foregroundStyle(DesignSystem.Colors.textPrimary)
+                    Spacer()
+                    Stepper(value: $themeManager.terminalFontSize, in: 8...32, step: 1) {
+                        Text("\(Int(themeManager.terminalFontSize)) pt")
+                            .foregroundStyle(DesignSystem.Colors.textSecondary)
+                            .monospacedDigit()
+                    }
+                }
             } header: {
                 Text("Appearance")
                     .foregroundStyle(DesignSystem.Colors.textSecondary)

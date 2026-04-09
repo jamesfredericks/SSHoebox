@@ -145,6 +145,12 @@ public struct DatabaseManager {
             }
         }
 
+        migrator.registerMigration("v6") { db in
+            try db.alter(table: "host") { t in
+                t.add(column: "lastConnectedAt", .datetime)
+            }
+        }
+
         return migrator
     }
 }

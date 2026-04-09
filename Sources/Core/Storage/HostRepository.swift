@@ -31,4 +31,13 @@ public struct HostRepository {
             try SavedHost.fetchOne(db, key: id)
         }
     }
+
+    public func updateLastConnected(hostId: String) throws {
+        try dbManager.dbWriter.write { db in
+            try db.execute(
+                sql: "UPDATE host SET lastConnectedAt = ? WHERE id = ?",
+                arguments: [Date(), hostId]
+            )
+        }
+    }
 }

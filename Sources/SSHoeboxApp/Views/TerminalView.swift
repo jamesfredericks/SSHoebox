@@ -7,9 +7,10 @@ import SSHoeboxCore
 /// Handles remote SSH session I/O — forwards SSH output to the terminal display
 /// and user keystrokes back to the SSH session.
 struct RemoteTerminalView: NSViewRepresentable {
-    
+
     @ObservedObject var session: SSHSessionManager
-    var font: NSFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    @ObservedObject var themeManager: ThemeManager = .shared
+    var font: NSFont { NSFont.monospacedSystemFont(ofSize: themeManager.terminalFontSize, weight: .regular) }
     
     func makeNSView(context: Context) -> TerminalView {
         let termView = TerminalView(frame: .zero)

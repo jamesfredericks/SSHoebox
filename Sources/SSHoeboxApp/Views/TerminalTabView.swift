@@ -64,6 +64,35 @@ struct TerminalTabView: View {
             Divider()
                 .frame(height: 20)
 
+            // Font size controls
+            HStack(spacing: 0) {
+                Button {
+                    themeManager.decreaseFontSize()
+                } label: {
+                    Image(systemName: "minus")
+                        .font(.system(size: 11, weight: .medium))
+                        .frame(width: 24, height: 28)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(DesignSystem.Colors.textSecondary)
+                .help("Decrease font size (⌘-)")
+
+                Button {
+                    themeManager.increaseFontSize()
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 11, weight: .medium))
+                        .frame(width: 24, height: 28)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(DesignSystem.Colors.textSecondary)
+                .help("Increase font size (⌘+)")
+            }
+            .padding(.horizontal, 4)
+
+            Divider()
+                .frame(height: 20)
+
             // New tab button
             Button {
                 store.openNewSession()

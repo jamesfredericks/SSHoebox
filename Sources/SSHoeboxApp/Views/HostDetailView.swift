@@ -12,6 +12,7 @@ struct HostDetailView: View {
     @StateObject private var viewModel: CredentialsViewModel
     @ObservedObject private var hostsViewModel: HostsViewModel
     @State private var showingAddCredential = false
+    @State private var showingGenerateKey = false
     @State private var showingEditHost = false
     @State private var showingDeleteAlert = false
     @State private var credentialToEdit: Credential? = nil
@@ -82,6 +83,9 @@ struct HostDetailView: View {
         }
         .sheet(isPresented: $showingAddCredential) {
             AddCredentialSheet(viewModel: viewModel)
+        }
+        .sheet(isPresented: $showingGenerateKey) {
+            GenerateKeySheet(viewModel: viewModel, vaultKey: vaultKey)
         }
         .sheet(isPresented: $showingEditHost) {
             EditHostSheet(viewModel: hostsViewModel, host: host, vaultKey: vaultKey)
@@ -181,9 +185,22 @@ struct HostDetailView: View {
             Text("CREDENTIALS")
                 .font(DesignSystem.Typography.label())
                 .foregroundStyle(DesignSystem.Colors.textSecondary)
-            
+
             Spacer()
-            
+
+            Button {
+                showingGenerateKey = true
+            } label: {
+                Label("Generate Key", systemImage: "key.badge.plus")
+                    .font(DesignSystem.Typography.label())
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(DesignSystem.Colors.surface)
+                    .foregroundStyle(DesignSystem.Colors.textSecondary)
+                    .cornerRadius(DesignSystem.Radius.sm)
+            }
+            .buttonStyle(.plain)
+
             Button {
                 showingAddCredential = true
             } label: {

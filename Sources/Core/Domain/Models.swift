@@ -26,7 +26,7 @@ public struct HostGroup: Codable, FetchableRecord, PersistableRecord, Identifiab
 
 public struct SavedHost: Codable, FetchableRecord, PersistableRecord, Identifiable {
     public static var databaseTableName = "host"
-    
+
     public var id: String
     public var name: String
     public var hostname: String
@@ -36,7 +36,8 @@ public struct SavedHost: Codable, FetchableRecord, PersistableRecord, Identifiab
     public var groupId: String? // Optional reference to HostGroup
     public var createdAt: Date
     public var updatedAt: Date
-    
+    public var lastConnectedAt: Date?
+
     public init(id: String = UUID().uuidString,
                 name: String,
                 hostname: String,
@@ -45,7 +46,8 @@ public struct SavedHost: Codable, FetchableRecord, PersistableRecord, Identifiab
                 user: String = "",
                 groupId: String? = nil,
                 createdAt: Date = Date(),
-                updatedAt: Date = Date()) {
+                updatedAt: Date = Date(),
+                lastConnectedAt: Date? = nil) {
         self.id = id
         self.name = name
         self.hostname = hostname
@@ -55,6 +57,7 @@ public struct SavedHost: Codable, FetchableRecord, PersistableRecord, Identifiab
         self.groupId = groupId
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.lastConnectedAt = lastConnectedAt
     }
 }
 

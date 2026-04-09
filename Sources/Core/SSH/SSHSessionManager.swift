@@ -20,6 +20,9 @@ public class SSHSessionManager: ObservableObject {
     
     /// Called when the session ends (disconnect or error).
     public var onDisconnect: (() -> Void)?
+
+    /// Called once when the session transitions to .connected.
+    public var onConnected: (() -> Void)?
     
     private var client: SSHClient?
     private var sessionTask: Task<Void, Never>?
@@ -246,10 +249,11 @@ public class SSHSessionManager: ObservableObject {
                 
                 
                 try await sshClient.withPTY(ptyRequest) { inbound, outbound in
-                    await MainActor.run { 
+                    await MainActor.run {
                         self.log("PTY Granted. Starting Shell...", color: "32")
                         self.stdinWriter = outbound
-                        self.connectionState = .connected 
+                        self.connectionState = .connected
+                        self.onConnected?()
                     }
                     
                     // Handle Stdin
