@@ -7,6 +7,9 @@ struct PreferencesView: View {
     @State private var autoLockTimeout: Int = 15
     @State private var isBiometricEnabled: Bool = false
     @State private var showBiometricVaultLockedAlert: Bool = false
+    @State private var knownHosts: [KnownHost] = []
+    @State private var knownHostToDelete: KnownHost? = nil
+    @State private var showDeleteKnownHostAlert: Bool = false
     
     var body: some View {
         Form {
@@ -188,6 +191,38 @@ struct PreferencesView: View {
                     .foregroundStyle(DesignSystem.Colors.textSecondary)
             }
             
+            // Known Hosts Section
+            Section {
+                if knownHosts.isEmpty {
+                    HStack {
+                        Spacer()
+                        VStack(spacing: DesignSystem.Spacing.standard) {
+                            Image(systemName: "checkmark.shield")
+                                .font(.system(size: 28))
+                                .foregroundStyle(DesignSystem.Colors.textSecondary.opacity(0.5))
+                            Text("No trusted host keys yet.")
+                                .font(DesignSystem.Typography.body())
+                                .foregroundStyle(DesignSystem.Colors.textSecondary)
+                        }
+                        .padding(.vertical, DesignSystem.Spacing.medium)
+                        Spacer()
+                    }
+                } else {
+                    ForEach(knownHosts) { host in
+                        KnownHostRow(knownHost: host) {
+                            knownHostToDelete = host
+                            showDeleteKnownHostAlert = true
+                        }
+                    }
+                }
+            } header: {
+                Text("Known Hosts")
+                    .foregroundStyle(DesignSystem.Colors.textSecondary)
+            } footer: {
+                Text("Trusted SSH host keys, stored on first connection. Remove an entry if a server's key has legitimately changed (e.g. after a reinstall), then reconnect to re-trust it.")
+                    .foregroundStyle(DesignSystem.Colors.textSecondary)
+            }
+
             Section {
                 Picker(selection: Binding(
                     get: { themeManager.currentTheme.id },
@@ -238,6 +273,15 @@ struct PreferencesView: View {
             }
             // Read biometric state fresh from the source of truth
             isBiometricEnabled = BiometricAuthManager.isBiometricEnrolled
+            loadKnownHosts()
+        }
+        .alert("Remove Trusted Key?", isPresented: $showDeleteKnownHostAlert, presenting: knownHostToDelete) { host in
+            Button("Remove", role: .destructive) {
+                deleteKnownHost(host)
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: { host in
+            Text("The trusted key for \(host.hostname):\(host.port) will be removed. You will be asked to re-trust the server's key on your next connection.")
         }
         .alert("Vault Locked", isPresented: $showBiometricVaultLockedAlert) {
             Button("OK", role: .cancel) { }
@@ -252,5 +296,63 @@ struct PreferencesView: View {
         } message: {
             Text(viewModel.errorMessage ?? "")
         }
+    }
+
+    private func loadKnownHosts() {
+        guard let db = viewModel.dbManager else { return }
+        knownHosts = (try? KnownHostRepository(dbManager: db).getAll()) ?? []
+    }
+
+    private func deleteKnownHost(_ host: KnownHost) {
+        guard let db = viewModel.dbManager else { return }
+        try? KnownHostRepository(dbManager: db).delete(host)
+        knownHosts.removeAll { $0.id == host.id }
+    }
+}
+
+// MARK: - Known Host Row
+
+struct KnownHostRow: View {
+    let knownHost: KnownHost
+    let onDelete: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("\(knownHost.hostname):\(knownHost.port)")
+                    .font(DesignSystem.Typography.body())
+                    .foregroundStyle(DesignSystem.Colors.textPrimary)
+
+                Text(knownHost.keyType)
+                    .font(.system(.caption2, design: .monospaced))
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(DesignSystem.Colors.accent.opacity(0.15))
+                    .foregroundStyle(DesignSystem.Colors.accent)
+                    .cornerRadius(4)
+
+                Spacer()
+
+                Button(role: .destructive, action: onDelete) {
+                    Image(systemName: "trash")
+                        .font(.caption)
+                        .foregroundStyle(DesignSystem.Colors.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .help("Remove trusted key")
+            }
+
+            Text(knownHost.keyFingerprint)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(DesignSystem.Colors.textSecondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+
+            Text("Trusted since \(knownHost.firstSeenAt.formatted(date: .abbreviated, time: .omitted))")
+                .font(.caption2)
+                .foregroundStyle(DesignSystem.Colors.textSecondary.opacity(0.7))
+        }
+        .padding(.vertical, 4)
     }
 }
