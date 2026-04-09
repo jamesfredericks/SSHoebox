@@ -28,10 +28,12 @@ struct TerminalTabView: View {
                         RemoteTerminalView(session: session.manager)
                             .opacity(store.selectedSessionId == session.id ? 1 : 0)
                     }
-                    // Reconnect overlay — observes the selected session's manager directly
+                    // Reconnect / passphrase overlay — observes the selected session's manager directly
                     if let selected = store.sessions.first(where: { $0.id == store.selectedSessionId }) {
                         SessionStateOverlay(manager: selected.manager) {
                             store.reconnect(selected)
+                        } onPassphrase: { passphrase in
+                            store.submitPassphrase(passphrase, for: selected)
                         }
                     }
                 }
@@ -146,30 +148,83 @@ struct TerminalTabView: View {
 
 // MARK: - Session State Overlay
 
-/// Shown over the terminal when a session is disconnected or failed.
+/// Shown over the terminal when a session is disconnected, failed, or needs a key passphrase.
 /// Observes the manager directly so it reacts to connection state changes.
 struct SessionStateOverlay: View {
     @ObservedObject var manager: SSHSessionManager
     let onReconnect: () -> Void
+    let onPassphrase: (String) -> Void
+
+    @State private var passphraseInput = ""
 
     var body: some View {
-        switch manager.connectionState {
-        case .disconnected, .failed:
-            VStack(spacing: 16) {
-                Image(systemName: "wifi.slash")
-                    .font(.system(size: 40))
-                    .foregroundStyle(DesignSystem.Colors.textSecondary.opacity(0.6))
-                Text("Session ended")
-                    .font(.title3)
-                    .foregroundStyle(DesignSystem.Colors.textSecondary)
-                Button("Reconnect") { onReconnect() }
+        if manager.passphraseChallenge != nil {
+            passphraseView
+        } else {
+            switch manager.connectionState {
+            case .disconnected, .failed:
+                disconnectedView
+            default:
+                EmptyView()
+            }
+        }
+    }
+
+    private var disconnectedView: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "wifi.slash")
+                .font(.system(size: 40))
+                .foregroundStyle(DesignSystem.Colors.textSecondary.opacity(0.6))
+            Text("Session ended")
+                .font(.title3)
+                .foregroundStyle(DesignSystem.Colors.textSecondary)
+            Button("Reconnect") { onReconnect() }
+                .buttonStyle(.borderedProminent)
+                .tint(DesignSystem.Colors.accent)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(red: 0.05, green: 0.05, blue: 0.08))
+    }
+
+    private var passphraseView: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "lock.fill")
+                .font(.system(size: 40))
+                .foregroundStyle(DesignSystem.Colors.accent)
+            Text("Key Passphrase Required")
+                .font(.title3)
+                .foregroundStyle(DesignSystem.Colors.textPrimary)
+            Text("This private key is encrypted. Enter the passphrase to continue.")
+                .font(DesignSystem.Typography.label())
+                .foregroundStyle(DesignSystem.Colors.textSecondary)
+                .multilineTextAlignment(.center)
+            SecureField("Passphrase", text: $passphraseInput)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 260)
+                .onSubmit { submitPassphrase() }
+            HStack(spacing: 12) {
+                Button("Cancel") {
+                    manager.passphraseChallenge = nil
+                    passphraseInput = ""
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(DesignSystem.Colors.textSecondary)
+
+                Button("Unlock") { submitPassphrase() }
                     .buttonStyle(.borderedProminent)
                     .tint(DesignSystem.Colors.accent)
+                    .disabled(passphraseInput.isEmpty)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(red: 0.05, green: 0.05, blue: 0.08))
-        default:
-            EmptyView()
         }
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(red: 0.05, green: 0.05, blue: 0.08))
+    }
+
+    private func submitPassphrase() {
+        guard !passphraseInput.isEmpty else { return }
+        let p = passphraseInput
+        passphraseInput = ""
+        onPassphrase(p)
     }
 }

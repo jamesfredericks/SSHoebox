@@ -92,6 +92,22 @@ class TerminalSessionStore: ObservableObject {
         }
     }
 
+    /// Called by the UI after the user supplies a passphrase for an encrypted key.
+    func submitPassphrase(_ passphrase: String, for session: TerminalSession) {
+        guard let challenge = session.manager.passphraseChallenge else { return }
+        session.manager.passphraseChallenge = nil
+        Task {
+            await session.manager.connect(
+                host: challenge.host,
+                port: challenge.port,
+                username: challenge.username,
+                pemKey: challenge.pemKey,
+                passphrase: passphrase,
+                terminalSize: challenge.terminalSize
+            )
+        }
+    }
+
     func closeSession(_ session: TerminalSession) {
         session.manager.disconnect()
         sessions.removeAll { $0.id == session.id }

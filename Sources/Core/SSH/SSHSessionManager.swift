@@ -47,6 +47,9 @@ public class SSHSessionManager: ObservableObject {
     /// When nil the session falls back to accepting any key (legacy behaviour).
     public var knownHostRepository: KnownHostRepository?
 
+    /// Set when a PEM key requires a passphrase. The UI observes this to show a prompt.
+    @Published public var passphraseChallenge: SSHPassphraseChallenge? = nil
+
     public init() {}
 
     // MARK: - Connect (Password)
@@ -96,14 +99,33 @@ public class SSHSessionManager: ObservableObject {
         port: Int = 22,
         username: String,
         pemKey: String,
+        passphrase: String? = nil,
         terminalSize: (cols: Int, rows: Int) = (80, 24)
     ) async {
-        if let ed25519Key = try? Curve25519.Signing.PrivateKey(sshEd25519: pemKey) {
+        let decryptionKey = passphrase.flatMap { $0.data(using: .utf8) }
+
+        if let ed25519Key = try? Curve25519.Signing.PrivateKey(sshEd25519: pemKey, decryptionKey: decryptionKey) {
+            passphraseChallenge = nil
             await connect(host: host, port: port, username: username, ed25519Key: ed25519Key, terminalSize: terminalSize)
-        } else {
-            log("Key type not supported for direct auth — using keyboard-interactive.", color: "33")
-            await connectInteractive(host: host, port: port, username: username, terminalSize: terminalSize)
+            return
         }
+
+        // Key is encrypted and no (or wrong) passphrase was provided
+        if SSHKeyParser.isEncryptedKey(pemKey) {
+            if passphrase == nil {
+                passphraseChallenge = SSHPassphraseChallenge(
+                    pemKey: pemKey, host: host, port: port,
+                    username: username, terminalSize: terminalSize
+                )
+            } else {
+                log("Incorrect passphrase for private key.", color: "31")
+                connectionState = .failed("Incorrect key passphrase — please try again.")
+            }
+            return
+        }
+
+        log("Key type not supported for direct auth — using keyboard-interactive.", color: "33")
+        await connectInteractive(host: host, port: port, username: username, terminalSize: terminalSize)
     }
 
     // MARK: - Connect (Interactive / YubiKey)
@@ -321,6 +343,18 @@ public class SSHSessionManager: ObservableObject {
     deinit {
         sessionTask?.cancel()
     }
+}
+
+// MARK: - Passphrase Challenge
+
+/// Carries the context needed to retry a connection once the user supplies a passphrase.
+public struct SSHPassphraseChallenge: Identifiable {
+    public let id = UUID()
+    public let pemKey: String
+    public let host: String
+    public let port: Int
+    public let username: String
+    public let terminalSize: (cols: Int, rows: Int)
 }
 
 // MARK: - Keyboard Interactive Auth Delegate

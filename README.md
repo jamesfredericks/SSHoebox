@@ -1,114 +1,126 @@
-# SSHoebox - Secure SSH & SFTP Manager
+# SSHoebox — Secure SSH & SFTP Manager
 
-SSHoebox is a secure, native macOS application for managing SSH and SFTP connections. It features a hardened vault for credentials, an embedded terminal with theme support, and built-in tools for password generation and backups.
+SSHoebox is a secure, native macOS application for managing SSH and SFTP connections. It stores credentials in a hardened encrypted vault, provides an embedded terminal with tab support and theme customization, and includes a built-in SFTP file browser, SSH agent, password generator, and backup tools.
 
 ## Features
 
-- **Secure Vault**:
-  - AES-256 authenticated encryption (GCM) for all sensitive data
-  - Master Password protection with strong KDF (PBKDF2-HMAC-SHA256)
-  - SQLCipher-based encrypted database storage
-  - **Touch ID / Face ID unlock** — unlock your vault with a fingerprint instead of typing your master password
-  - **Portable Vault (Cloud Sync)** — cryptographic metadata is stored in a sidecar `vault_metadata.json` file, allowing you to seamlessly sync your vault across Macs using iCloud Drive, Dropbox, or any other private cloud provider.
+### Secure Vault
+- AES-256-GCM authenticated encryption for all sensitive data
+- Master password protection with PBKDF2-HMAC-SHA256 (100k iterations)
+- SQLCipher full-file encrypted database
+- **Touch ID / Face ID unlock** — biometric access via Secure Enclave-backed keychain item
+- **Portable Vault** — cryptographic metadata lives in a sidecar `vault_metadata.json`, making it trivial to sync your vault across Macs via iCloud Drive, Dropbox, or any other provider
+- **Auto-lock** — configurable idle timeout locks the vault automatically; active SSH sessions delay lock
+- **Rate limiting** — exponential backoff after 5 failed unlock attempts (up to 5-minute lockout)
+- **Password history** — previous secrets are archived when a credential is updated, reviewable and copyable at any time
 
-- **Connection Manager**:
-  - Organize Hosts and Credentials (passwords, keys)
-  - One-click connection launching for SSH and SFTP
-  - "Copy to Clipboard" with auto-clear warnings (UI indicator)
+### Connection Manager
+- Organize hosts into groups; store passwords and SSH private keys per host
+- **TOFU host key verification** — trust-on-first-use fingerprints stored in a local known-hosts database; detects key changes and alerts you
+- One-click SSH and SFTP connection launching
+- **Clipboard auto-clear** — copied secrets are cleared from the clipboard after a configurable delay (default 30 s); an in-app badge counts down and offers a manual clear
 
-- **Embedded Shell**:
-  - Fully functional embedded remote terminal (`SwiftTerm` + `Citadel`)
-  - **Zero-Disk Security**: All authentication is handled in-memory. No plaintext scripts or passwords ever touch the disk.
-  - Customizable themes (Matrix, Ocean, Sunset, Deep Space)
-  - Unified protocol support: SSH and SFTP sessions both run directly in the internal tab.
+### Embedded Terminal
+- Fully functional embedded remote terminal (`SwiftTerm` + `Citadel`)
+- Multi-tab support — open multiple sessions to the same host simultaneously
+- **Zero-disk security** — all authentication is handled in-memory; no plaintext passwords or scripts ever touch disk
+- Automatic reconnect overlay when a session drops
+- Customizable themes (Matrix, Ocean, Sunset, Deep Space)
+- Supports password auth, Ed25519 key auth, RSA key auth, and keyboard-interactive (YubiKey / MFA)
+- **Encrypted key passphrase support** — passphrase-protected private keys prompt inline without exposing the passphrase
 
-- **Tools**:
-  - **Password Generator**: Create strong, random passwords or passphrases (Bitwarden-style)
-  - **Backup & Restore**: Securely export your entire vault for safe-keeping
+### SFTP File Browser
+- Full file browser with breadcrumb path navigation
+- Upload files from your Mac; download files with a native Save panel
+- Create folders, rename entries, delete files and directories
+- Show/hide dotfiles toggle
+- Shares the same TOFU host key store as the SSH terminal
+
+### SSH Agent
+- Built-in OpenSSH-compatible SSH agent (Unix socket at `~/.config/com.sshoebox.app/agent.sock`)
+- Serves all vault key credentials automatically when the vault is unlocked
+- Full RSA SHA-2 support (`rsa-sha2-256`, `rsa-sha2-512`) — compatible with OpenSSH 8.8+
+- Auto-starts on unlock; stops on lock
+
+### Tools
+- **Password Generator** — random passwords or passphrases (Bitwarden-style); configurable length, character sets, separators, and ambiguous-character avoidance
+- **Backup & Restore** — export the entire vault to a single encrypted `.abgvault` file; import on any Mac
 
 ## Installation
 
-### Option 1: Build from Source (Recommended for teams)
+### Option 1: Build from Source (recommended)
 
-Building from source is the **most reliable** way to install SSHoebox. It avoids macOS Gatekeeper restrictions entirely, guarantees full Touch ID support, and means you're running exactly the code you reviewed.
+Building from source avoids Gatekeeper restrictions entirely and guarantees Touch ID works out of the box.
 
-**Requirements:**
-- macOS 14.0 (Sonoma) or later
-- Swift toolchain (`xcode-select --install`)
-
-**Steps:**
+**Requirements:** macOS 14.0 (Sonoma) or later, Swift toolchain (`xcode-select --install`)
 
 ```bash
-# Clone the repo
 git clone https://github.com/jamesfredericks/SSHoebox.git
 cd SSHoebox
 
-# Build and package the app
+# Build and package
 ./scripts/bundle_app.sh
 
-# Move to Applications (use sudo to handle any existing install)
+# Install
 sudo cp -r dist/SSHoebox.app /Applications/
 ```
-
-Then double-click `SSHoebox.app` in `/Applications` — no warnings, no dialogs, Touch ID works out of the box.
-
----
 
 ### Option 2: Pre-built Binary
 
 1. Download the latest `SSHoebox-v2.2.1.zip` from [Releases](https://github.com/jamesfredericks/SSHoebox/releases)
-2. Unzip and move `SSHoebox.app` to your `/Applications` folder
-3. Run the following one-time command in Terminal to allow the app to run:
+2. Unzip and move `SSHoebox.app` to `/Applications`
+3. Remove the quarantine flag (required for ad-hoc–signed binaries):
    ```bash
    sudo xattr -cr /Applications/SSHoebox.app
    ```
-4. Double-click `SSHoebox.app` to launch
+4. Launch `SSHoebox.app`
 
-> **Why the extra command?** SSHoebox is signed with an ad-hoc certificate (not a paid Apple Developer ID) so macOS Gatekeeper blocks it by default. The `xattr -cr` command removes the quarantine flag macOS places on downloaded files. This is a standard workaround for open-source Mac apps distributed outside the App Store.
+> **Why the extra command?** SSHoebox is signed with an ad-hoc certificate rather than a paid Apple Developer ID. The `xattr -cr` command removes the macOS quarantine flag placed on downloaded files — a standard workaround for open-source Mac apps distributed outside the App Store.
 
 ## First Run
 
-1. On first launch, you will be prompted to create a **Master Password**
-2. This password encrypts your vault and **cannot be recovered if lost**
-3. After your first successful unlock, you'll be prompted to enable **Touch ID / Face ID** for faster access
-4. Once unlocked, you can start adding Hosts and Credentials
+1. On first launch you will be prompted to create a **Master Password**
+2. This password encrypts your vault and **cannot be recovered if lost** — keep a copy somewhere safe
+3. After your first successful unlock you'll be offered to enable **Touch ID / Face ID**
+4. Add your first host and credential, then click **Connect**
 
-> **Tip:** You can enable or disable biometric unlock at any time from **Preferences → Biometric Unlock**.
-
-## Architecture
-
-- **Core**: Contains all business logic, security primitives, and database management. Isolated from UI.
-- **SSHoeboxApp**: The SwiftUI layer, following MVVM pattern.
-- **Security**: Built on top of Apple's `CryptoKit` and `SQLCipher` for robust data protection.
+> **SSH Agent:** To use SSHoebox as your system SSH agent, add the following to your shell profile:
+> ```bash
+> export SSH_AUTH_SOCK="$HOME/.config/com.sshoebox.app/agent.sock"
+> ```
+> The agent starts automatically when you unlock the vault (configurable in Preferences).
 
 ## Development
 
-### Building a Release
-
-To create a distributable app bundle:
-
 ```bash
+# Debug build
+swift build
+
+# Run tests
+swift test
+
+# Run a single test suite
+swift test --filter CryptoTests
+
+# Production bundle (creates signed .app in dist/)
 ./scripts/bundle_app.sh
+
+# Open in Xcode
+open Package.swift
 ```
 
-This will:
-- Build the app in release mode
-- Create a signed `.app` bundle
-- Generate a distributable ZIP file in `dist/`
+## Architecture
 
-See [Distribution Guide](docs/DISTRIBUTION.md) for more details.
+The codebase is split into two Swift package targets:
 
-## Security
+- **`SSHoeboxCore`** — pure business logic with no UI dependencies. Security, storage, SSH, SFTP, agent, and backup logic all live here.
+- **`SSHoeboxApp`** — SwiftUI application (MVVM). Views are thin; ViewModels own domain logic.
 
-SSHoebox takes security seriously:
-- All credentials are encrypted at rest using AES-256-GCM
-- Master password is never stored, only a derived key
-- **In-Memory Authentication**: Unlike other managers that use temporary scripts, SSHoebox handles all terminal logins in-memory. Your passwords never touch the disk in plaintext.
-- Database uses field-level encryption for all sensitive metadata
-- Touch ID / Face ID unlock uses a biometric-gated keychain item
-- No telemetry or external network requests
-
-For security concerns, please see [SECURITY.md](SECURITY.md) (if you plan to add one).
+**Key security properties:**
+- Master password is never stored — only the derived vault key (in memory) and a biometric-gated keychain item
+- All credential decryption is on-demand; secrets are never written to disk in plaintext
+- Field-level AES-256-GCM encryption is applied on top of SQLCipher full-file encryption (defense in depth)
+- The SSH agent only serves keys while the vault is unlocked
 
 ## License
 
@@ -116,4 +128,4 @@ Copyright © 2026. All rights reserved.
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome. Please open an issue to discuss significant changes before submitting a pull request.

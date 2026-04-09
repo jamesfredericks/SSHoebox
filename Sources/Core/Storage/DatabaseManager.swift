@@ -135,6 +135,16 @@ public struct DatabaseManager {
             )
         }
 
+        migrator.registerMigration("v5") { db in
+            try db.create(table: "passwordHistory") { t in
+                t.column("id", .text).primaryKey()
+                t.column("credentialId", .text).notNull()
+                    .references("credential", onDelete: .cascade)
+                t.column("encryptedBlob", .blob).notNull()
+                t.column("changedAt", .datetime).notNull()
+            }
+        }
+
         return migrator
     }
 }

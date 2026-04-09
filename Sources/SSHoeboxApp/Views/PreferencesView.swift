@@ -5,6 +5,7 @@ struct PreferencesView: View {
     @ObservedObject var viewModel: VaultViewModel
     @ObservedObject var themeManager = ThemeManager.shared
     @State private var autoLockTimeout: Int = 15
+    @State private var clipboardClearTimeout: Int = 30
     @State private var isBiometricEnabled: Bool = false
     @State private var showBiometricVaultLockedAlert: Bool = false
     @State private var knownHosts: [KnownHost] = []
@@ -30,11 +31,23 @@ struct PreferencesView: View {
                     UserDefaults.standard.set(newValue, forKey: "autoLockTimeout")
                     UserDefaults.standard.set(true, forKey: "hasSetAutoLockTimeout")
                 }
+
+                Picker("Clear clipboard after", selection: $clipboardClearTimeout) {
+                    Text("15 seconds").tag(15)
+                    Text("30 seconds").tag(30)
+                    Text("1 minute").tag(60)
+                    Text("2 minutes").tag(120)
+                    Text("Never").tag(0)
+                }
+                .onChange(of: clipboardClearTimeout) { newValue in
+                    UserDefaults.standard.set(newValue, forKey: "clipboardClearTimeout")
+                    ClipboardManager.shared.clipboardClearTimeout = newValue
+                }
             } header: {
                 Text("Security")
                     .foregroundStyle(DesignSystem.Colors.textSecondary)
             } footer: {
-                Text("Automatically lock the vault after a period of inactivity.")
+                Text("Automatically lock the vault after a period of inactivity. Copied secrets are cleared from the clipboard after the configured delay.")
                     .foregroundStyle(DesignSystem.Colors.textSecondary)
             }
             
@@ -271,6 +284,8 @@ struct PreferencesView: View {
             } else {
                 autoLockTimeout = saved
             }
+            let savedClipboard = UserDefaults.standard.integer(forKey: "clipboardClearTimeout")
+            clipboardClearTimeout = savedClipboard == 0 ? 30 : savedClipboard
             // Read biometric state fresh from the source of truth
             isBiometricEnabled = BiometricAuthManager.isBiometricEnrolled
             loadKnownHosts()

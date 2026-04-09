@@ -52,15 +52,22 @@ class CredentialsViewModel: ObservableObject {
             errorMessage = "Credential not found"
             return
         }
-        
+
         guard let secretData = secret.data(using: .utf8) else { return }
-        
+
         // Encrypt username
         guard let encryptedUsername = try? CryptoManager.encryptString(username, using: vaultKey) else {
             errorMessage = "Failed to encrypt username."
             return
         }
-        
+
+        // Archive the old secret in history before overwriting (only if it actually changed)
+        if let oldSecret = try? repository.decryptSecret(for: existingCredential, vaultKey: vaultKey),
+           oldSecret != secretData {
+            let historyRepo = PasswordHistoryRepository(dbManager: dbManager)
+            try? historyRepo.add(credentialId: id, oldSecret: oldSecret, vaultKey: vaultKey)
+        }
+
         do {
             _ = try repository.updateCredential(
                 id: id,

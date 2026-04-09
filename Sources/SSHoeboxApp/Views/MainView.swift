@@ -98,6 +98,13 @@ struct MainView: View {
         .onAppear {
             let registry = sessionRegistry
             viewModel.activeSessionCount = { registry.totalActiveConnections }
+            // Sync clipboard timeout from UserDefaults
+            let timeout = UserDefaults.standard.integer(forKey: "clipboardClearTimeout")
+            ClipboardManager.shared.clipboardClearTimeout = timeout == 0 ? 30 : timeout
+        }
+        .overlay(alignment: .bottom) {
+            ClipboardStatusBadge()
+                .animation(.spring(response: 0.3, dampingFraction: 0.8), value: ClipboardManager.shared.isActive)
         }
     }
 }

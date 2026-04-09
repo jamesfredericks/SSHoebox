@@ -16,10 +16,12 @@ struct HostDetailView: View {
     @State private var showingDeleteAlert = false
     @State private var credentialToEdit: Credential? = nil
     @State private var copiedId: String? = nil
+    @State private var credentialForHistory: Credential? = nil
     @State private var selectedTab: HostTab = .credentials
-    
+    @StateObject private var sftpManager = SFTPSessionManager()
+
     enum HostTab {
-        case credentials, terminal
+        case credentials, terminal, files
     }
     
     init(host: SavedHost, dbManager: DatabaseManager, vaultKey: SymmetricKey, hostsViewModel: HostsViewModel) {
@@ -45,6 +47,10 @@ struct HostDetailView: View {
                 TerminalTabView(store: sessionStore)
                     .opacity(selectedTab == .terminal ? 1 : 0)
                     .allowsHitTesting(selectedTab == .terminal)
+
+                SFTPBrowserView(sftp: sftpManager)
+                    .opacity(selectedTab == .files ? 1 : 0)
+                    .allowsHitTesting(selectedTab == .files)
             }
         }
         .navigationTitle("") // Hide default title since we have a hero
@@ -83,6 +89,9 @@ struct HostDetailView: View {
         .sheet(item: $credentialToEdit) { credential in
             EditCredentialSheet(viewModel: viewModel, credential: credential, vaultKey: vaultKey)
         }
+        .sheet(item: $credentialForHistory) { credential in
+            PasswordHistorySheet(credential: credential, dbManager: dbManager, vaultKey: vaultKey)
+        }
         .alert("Delete Host", isPresented: $showingDeleteAlert) {
             Button("Cancel", role: .cancel) { }
             Button("Delete", role: .destructive) {
@@ -93,6 +102,11 @@ struct HostDetailView: View {
             }
         } message: {
             Text("Are you sure you want to delete '\(host.decryptedName(using: vaultKey))'? This action cannot be undone.")
+        }
+        .onChange(of: selectedTab) { _, newTab in
+            if newTab == .files && sftpManager.connectionState == .disconnected {
+                Task { await connectSFTP() }
+            }
         }
     }
     
@@ -139,6 +153,7 @@ struct HostDetailView: View {
             Picker("", selection: $selectedTab) {
                 Label("Credentials", systemImage: "key").tag(HostDetailView.HostTab.credentials)
                 Label("Terminal", systemImage: "terminal").tag(HostDetailView.HostTab.terminal)
+                Label("Files", systemImage: "folder").tag(HostDetailView.HostTab.files)
             }
             .pickerStyle(.segmented)
             .padding(.horizontal, DesignSystem.Spacing.large)
@@ -204,7 +219,15 @@ struct HostDetailView: View {
                         } label: {
                             Label("Edit", systemImage: "pencil")
                         }
-                        
+
+                        Button {
+                            credentialForHistory = credential
+                        } label: {
+                            Label("View History", systemImage: "clock.arrow.circlepath")
+                        }
+
+                        Divider()
+
                         Button(role: .destructive) {
                             viewModel.deleteCredential(credential: credential)
                         } label: {
@@ -218,22 +241,57 @@ struct HostDetailView: View {
 
     
     func connect(protocol type: String) {
-        // Direct all connection types (SSH, SFTP) to the secure internal SwiftTerm terminal
-        selectedTab = .terminal
+        if type == "sftp" {
+            selectedTab = .files
+            if sftpManager.connectionState == .disconnected {
+                Task { await connectSFTP() }
+            }
+        } else {
+            selectedTab = .terminal
+        }
+    }
+
+    @MainActor
+    private func connectSFTP() async {
+        guard sftpManager.connectionState == .disconnected else { return }
+
+        sftpManager.knownHostRepository = KnownHostRepository(dbManager: dbManager)
+
+        let hostname   = host.decryptedHostname(using: vaultKey)
+        let defaultUser = host.decryptedUser(using: vaultKey)
+
+        viewModel.fetchCredentials()
+
+        // Prefer password credential; fall back to key
+        if let pwCred = viewModel.credentials.first(where: { $0.type == "password" }) {
+            let user = {
+                let u = pwCred.decryptedUsername(using: vaultKey)
+                return u.isEmpty ? defaultUser : u
+            }()
+            if let secret = viewModel.decrypt(credential: pwCred) {
+                await sftpManager.connect(host: hostname, port: host.port, username: user, password: secret)
+                return
+            }
+        }
+
+        if let keyCred = viewModel.credentials.first(where: { $0.type == "key" }) {
+            let user = {
+                let u = keyCred.decryptedUsername(using: vaultKey)
+                return u.isEmpty ? defaultUser : u
+            }()
+            if let pem = viewModel.decrypt(credential: keyCred) {
+                await sftpManager.connect(host: hostname, port: host.port, username: user, pemKey: pem)
+                return
+            }
+        }
     }
 
     func copyPassword(for credential: Credential) {
-        if let secret = viewModel.decrypt(credential: credential) {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(secret, forType: .string)
-            copiedId = credential.id
-            
-            // Reset checkmark after 2 seconds
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                if copiedId == credential.id {
-                    copiedId = nil
-                }
-            }
+        guard let secret = viewModel.decrypt(credential: credential) else { return }
+        ClipboardManager.shared.copy(secret)
+        copiedId = credential.id
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            if copiedId == credential.id { copiedId = nil }
         }
     }
 }
