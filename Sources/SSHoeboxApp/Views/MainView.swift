@@ -51,12 +51,11 @@ struct MainView: View {
                 .listStyle(.sidebar)
                 .scrollContentBackground(.hidden)
                 
-                // Full-height rounded neon border
+                // Full-height rounded neon border (drawn within content area so corners are fully visible)
                 RoundedRectangle(cornerRadius: 12)
                     .stroke(DesignSystem.Colors.border, lineWidth: 1)
                     .padding(2)
-                    .ignoresSafeArea()
-                    .allowsHitTesting(false) // Don't block traffic lights or list items
+                    .allowsHitTesting(false)
             }
             .preferredColorScheme(themeManager.currentTheme.colorScheme)
             .tint(DesignSystem.Colors.accent)
