@@ -65,9 +65,9 @@ class HostsViewModel: ObservableObject {
         guard !searchQuery.trimmingCharacters(in: .whitespaces).isEmpty else { return hosts }
         let q = searchQuery.lowercased()
         return hosts.filter { host in
-            host.name.lowercased().contains(q) ||
-            host.hostname.lowercased().contains(q) ||
-            host.user.lowercased().contains(q)
+            host.decryptedName(using: vaultKey).lowercased().contains(q) ||
+            host.decryptedHostname(using: vaultKey).lowercased().contains(q) ||
+            host.decryptedUser(using: vaultKey).lowercased().contains(q)
         }
     }
 
