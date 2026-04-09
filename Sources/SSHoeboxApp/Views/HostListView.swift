@@ -41,7 +41,7 @@ struct HostListView: View {
             }
             .padding(.horizontal, DesignSystem.Spacing.medium)
             .padding(.vertical, 8)
-            .background(DesignSystem.Colors.surface)
+            .background(DesignSystem.Colors.background)
 
             Divider()
 

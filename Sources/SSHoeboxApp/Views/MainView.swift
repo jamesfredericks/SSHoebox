@@ -77,6 +77,7 @@ struct MainView: View {
                     .padding(2)
                     .allowsHitTesting(false)
             }
+            .clipShape(RoundedRectangle(cornerRadius: 12))
             .preferredColorScheme(themeManager.currentTheme.colorScheme)
             .tint(DesignSystem.Colors.accent)
         } detail: {
