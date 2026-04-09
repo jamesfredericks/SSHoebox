@@ -11,6 +11,17 @@ import CryptoKit
 class TerminalSessionRegistry: ObservableObject {
     private var stores: [String: TerminalSessionStore] = [:]
 
+    var totalActiveConnections: Int {
+        stores.values.reduce(0) { total, store in
+            total + store.sessions.filter { session in
+                switch session.manager.connectionState {
+                case .connected, .connecting: return true
+                default: return false
+                }
+            }.count
+        }
+    }
+
     /// Returns the existing store for a host, or creates one if none exists.
     func store(for host: SavedHost, dbManager: DatabaseManager, vaultKey: SymmetricKey) -> TerminalSessionStore {
         if let existing = stores[host.id] {
@@ -74,6 +85,13 @@ class TerminalSessionStore: ObservableObject {
         }
     }
 
+    func reconnect(_ session: TerminalSession) {
+        credentialsViewModel.fetchCredentials()
+        Task {
+            await connectSession(manager: session.manager)
+        }
+    }
+
     func closeSession(_ session: TerminalSession) {
         session.manager.disconnect()
         sessions.removeAll { $0.id == session.id }
@@ -111,7 +129,12 @@ class TerminalSessionStore: ObservableObject {
         } else if let cred = credentialsViewModel.credentials.first(where: { $0.type == "key" }) {
             let credUser = cred.decryptedUsername(using: vaultKey)
             let username = credUser.isEmpty ? defaultUser : credUser
-            await manager.connectInteractive(host: hostname, port: port, username: username)
+            if let pem = credentialsViewModel.decrypt(credential: cred) {
+                await manager.connect(host: hostname, port: port, username: username, pemKey: pem)
+            } else {
+                manager.log("ERROR: Decryption failed for private key.", color: "31")
+                await manager.connectInteractive(host: hostname, port: port, username: username)
+            }
         } else {
             await manager.connectInteractive(host: hostname, port: port, username: defaultUser)
         }

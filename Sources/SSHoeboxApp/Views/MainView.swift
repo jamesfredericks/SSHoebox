@@ -95,5 +95,9 @@ struct MainView: View {
             }
         }
         .environmentObject(sessionRegistry)
+        .onAppear {
+            let registry = sessionRegistry
+            viewModel.activeSessionCount = { registry.totalActiveConnections }
+        }
     }
 }

@@ -10,6 +10,7 @@ public class IdleMonitor: ObservableObject {
     private var lastActivityTime: Date = Date()
     private var timer: Timer?
     private var eventMonitor: Any?
+    private var localEventMonitor: Any?
     public var timeoutInterval: TimeInterval
     
     public init(timeoutInterval: TimeInterval) {
@@ -28,7 +29,7 @@ public class IdleMonitor: ObservableObject {
         }
         
         // Also monitor local events (within the app)
-        NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
+        localEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
             Task { @MainActor in
                 self?.resetActivity()
             }
@@ -49,13 +50,17 @@ public class IdleMonitor: ObservableObject {
             NSEvent.removeMonitor(monitor)
             eventMonitor = nil
         }
+        if let monitor = localEventMonitor {
+            NSEvent.removeMonitor(monitor)
+            localEventMonitor = nil
+        }
         timer?.invalidate()
         timer = nil
         isIdle = false
     }
-    
-    /// Reset activity timer (user did something)
-    private func resetActivity() {
+
+    /// Reset activity timer (user did something, or auto-lock was deferred).
+    public func resetActivity() {
         lastActivityTime = Date()
         if isIdle {
             isIdle = false

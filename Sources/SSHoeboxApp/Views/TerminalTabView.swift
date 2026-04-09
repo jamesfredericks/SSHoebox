@@ -28,6 +28,12 @@ struct TerminalTabView: View {
                         RemoteTerminalView(session: session.manager)
                             .opacity(store.selectedSessionId == session.id ? 1 : 0)
                     }
+                    // Reconnect overlay — observes the selected session's manager directly
+                    if let selected = store.sessions.first(where: { $0.id == store.selectedSessionId }) {
+                        SessionStateOverlay(manager: selected.manager) {
+                            store.reconnect(selected)
+                        }
+                    }
                 }
             }
         }
@@ -135,5 +141,35 @@ struct TerminalTabView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(red: 0.05, green: 0.05, blue: 0.08))
+    }
+}
+
+// MARK: - Session State Overlay
+
+/// Shown over the terminal when a session is disconnected or failed.
+/// Observes the manager directly so it reacts to connection state changes.
+struct SessionStateOverlay: View {
+    @ObservedObject var manager: SSHSessionManager
+    let onReconnect: () -> Void
+
+    var body: some View {
+        switch manager.connectionState {
+        case .disconnected, .failed:
+            VStack(spacing: 16) {
+                Image(systemName: "wifi.slash")
+                    .font(.system(size: 40))
+                    .foregroundStyle(DesignSystem.Colors.textSecondary.opacity(0.6))
+                Text("Session ended")
+                    .font(.title3)
+                    .foregroundStyle(DesignSystem.Colors.textSecondary)
+                Button("Reconnect") { onReconnect() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(DesignSystem.Colors.accent)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(red: 0.05, green: 0.05, blue: 0.08))
+        default:
+            EmptyView()
+        }
     }
 }

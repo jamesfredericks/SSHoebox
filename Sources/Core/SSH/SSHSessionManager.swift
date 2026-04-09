@@ -89,6 +89,23 @@ public class SSHSessionManager: ObservableObject {
         await startSession(settings: settings, terminalSize: terminalSize, capturer: capturer)
     }
 
+    // MARK: - Connect (PEM Key — parses Ed25519, falls back to interactive)
+
+    public func connect(
+        host: String,
+        port: Int = 22,
+        username: String,
+        pemKey: String,
+        terminalSize: (cols: Int, rows: Int) = (80, 24)
+    ) async {
+        if let ed25519Key = try? Curve25519.Signing.PrivateKey(sshEd25519: pemKey) {
+            await connect(host: host, port: port, username: username, ed25519Key: ed25519Key, terminalSize: terminalSize)
+        } else {
+            log("Key type not supported for direct auth — using keyboard-interactive.", color: "33")
+            await connectInteractive(host: host, port: port, username: username, terminalSize: terminalSize)
+        }
+    }
+
     // MARK: - Connect (Interactive / YubiKey)
 
     public func connectInteractive(
@@ -275,14 +292,6 @@ public class SSHSessionManager: ObservableObject {
     /// Send keystrokes from the terminal view to the SSH session.
     public func send(_ data: Data) {
         stdinContinuation?.yield(data)
-        
-        // Also write directly to the SSH client channel if available
-        guard let client = client else { return }
-        var buffer = ByteBuffer()
-        buffer.writeBytes(data)
-        let channelData = SSHChannelData(type: .channel, data: .byteBuffer(buffer))
-        _ = channelData // Will be used via channel write in a future iteration
-        _ = client
     }
     
     /// Notify the SSH server of a terminal resize.

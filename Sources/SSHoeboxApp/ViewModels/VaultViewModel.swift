@@ -36,6 +36,13 @@ class VaultViewModel: ObservableObject {
     var vaultKey: SymmetricKey?
     private var idleMonitor: IdleMonitor?
     private var cancellables = Set<AnyCancellable>()
+
+    // Rate limiting for password unlock
+    private var failedUnlockAttempts: Int = 0
+    private var lockoutUntil: Date?
+
+    /// Provided by MainView so auto-lock can defer while SSH sessions are active.
+    var activeSessionCount: (() -> Int)?
     
     // Path to the vault directory
     var vaultDirectoryURL: URL {
@@ -107,7 +114,22 @@ class VaultViewModel: ObservableObject {
         }
     }
     
+    private func recordFailedUnlock() {
+        failedUnlockAttempts += 1
+        guard failedUnlockAttempts >= 5 else { return }
+        // 5→30s, 6→60s, 7→120s, 8→240s, 9+→300s cap
+        let delay = min(pow(2.0, Double(failedUnlockAttempts - 4)) * 15, 300)
+        lockoutUntil = Date().addingTimeInterval(delay)
+    }
+
     func unlock(password: String) {
+        // Enforce lockout before attempting decryption
+        if let lockout = lockoutUntil, lockout > Date() {
+            let remaining = Int(lockout.timeIntervalSinceNow.rounded(.up))
+            errorMessage = "Too many failed attempts. Try again in \(remaining)s."
+            return
+        }
+
         do {
             // 1. Retrieve Salt & Validation from Sidecar (or fallback to Keychain)
             let metadataData: Data
@@ -127,13 +149,21 @@ class VaultViewModel: ObservableObject {
             
             // 3. Verify Key
             let decryptedValidation = try CryptoManager.decrypt(metadata.validation, using: key)
-            guard let validationString = String(data: decryptedValidation, encoding: .utf8), 
+            guard let validationString = String(data: decryptedValidation, encoding: .utf8),
                   validationString == "SSHOEBOX_VALID" else {
-                self.errorMessage = "Invalid password."
+                recordFailedUnlock()
+                if let lockout = lockoutUntil, lockout > Date() {
+                    let remaining = Int(lockout.timeIntervalSinceNow.rounded(.up))
+                    self.errorMessage = "Too many failed attempts. Try again in \(remaining)s."
+                } else {
+                    self.errorMessage = "Invalid password."
+                }
                 return
             }
-            
+
             // 4. Open DB
+            failedUnlockAttempts = 0
+            lockoutUntil = nil
             let manager = try DatabaseManager(path: dbPath)
             self.dbManager = manager
             self.vaultKey = key
@@ -289,9 +319,13 @@ class VaultViewModel: ObservableObject {
         // Subscribe to idle events
         monitor.$isIdle
             .sink { [weak self] isIdle in
-                if isIdle {
-                    self?.lock()
+                guard isIdle else { return }
+                // Defer auto-lock while SSH sessions are actively connected
+                if (self?.activeSessionCount?() ?? 0) > 0 {
+                    self?.idleMonitor?.resetActivity()
+                    return
                 }
+                self?.lock()
             }
             .store(in: &cancellables)
         
