@@ -137,7 +137,7 @@ The codebase is split into two Swift package targets:
 
 ## License
 
-Copyright © 2026. All rights reserved.
+MIT License — see [LICENSE](LICENSE) for details.
 
 ## Contributing
 
