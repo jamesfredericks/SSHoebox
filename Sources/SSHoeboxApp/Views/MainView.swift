@@ -1,78 +1,5 @@
 import SwiftUI
-import AppKit
 import SSHoeboxCore
-
-// Neutralizes the NSVisualEffectView card that NavigationSplitView injects behind
-// the sidebar, and removes the toolbar separator line.
-//
-// Key fixes vs. prior attempt:
-//  1. Searches DOWN from window.contentView (not up from self) — the WindowStyler's
-//     own NSView is placed OUTSIDE the NSSplitView by SwiftUI, so walking up never
-//     finds it.
-//  2. Neutralizes (material + layer props) instead of isHidden = true — hiding a
-//     parent also hides all its children, including our content.
-//  3. Sets window.backgroundColor so the neutralized material matches our theme.
-//  4. Retries at several delays to handle SwiftUI's async hierarchy construction.
-private struct WindowStyler: NSViewRepresentable {
-    let backgroundColor: Color
-
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        for delay in [0.0, 0.1, 0.3, 0.6] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                Self.apply(from: view, color: backgroundColor)
-            }
-        }
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        DispatchQueue.main.async { Self.apply(from: nsView, color: backgroundColor) }
-    }
-
-    private static func apply(from view: NSView, color: Color) {
-        guard let window = view.window else { return }
-
-        // Remove the hairline below the toolbar
-        window.titlebarSeparatorStyle = .none
-        // Set the window background so .windowBackground material matches our theme
-        window.backgroundColor = NSColor(color)
-
-        // Search DOWN from the window content view for the NSSplitView
-        guard let splitView = findFirst(NSSplitView.self, in: window.contentView),
-              let sidebarColumn = splitView.subviews.first else { return }
-
-        // Neutralize every NSVisualEffectView in the sidebar column (card background)
-        neutralize(in: sidebarColumn, color: color, depth: 0)
-    }
-
-    /// Recursively neutralizes NSVisualEffectView instances without hiding them
-    /// (hiding a parent would hide children too).
-    private static func neutralize(in view: NSView, color: Color, depth: Int) {
-        guard depth < 6 else { return }
-        if let fx = view as? NSVisualEffectView {
-            fx.material = .windowBackground
-            fx.blendingMode = .withinWindow
-            fx.state = .active
-            fx.wantsLayer = true
-            fx.layer?.cornerRadius = 0
-            fx.layer?.shadowOpacity = 0
-            fx.layer?.borderWidth = 0
-            fx.layer?.backgroundColor = NSColor(color).cgColor
-        }
-        view.subviews.forEach { neutralize(in: $0, color: color, depth: depth + 1) }
-    }
-
-    /// BFS/DFS helper: finds the first view of a given type in the subtree.
-    private static func findFirst<T: NSView>(_ type: T.Type, in view: NSView?) -> T? {
-        guard let view else { return nil }
-        if let match = view as? T { return match }
-        for sub in view.subviews {
-            if let found = findFirst(type, in: sub) { return found }
-        }
-        return nil
-    }
-}
 
 struct MainView: View {
     @ObservedObject var viewModel: VaultViewModel
@@ -89,50 +16,34 @@ struct MainView: View {
 
     var body: some View {
         NavigationSplitView {
-            ZStack {
-                DesignSystem.Colors.background
-                    .ignoresSafeArea()
-
-                List(selection: $selection) {
-                    Section("Vault") {
-                        NavigationLink(value: SidebarItem.hosts) {
-                            Label("Hosts", systemImage: "server.rack")
-                                .foregroundColor(DesignSystem.Colors.textPrimary)
-                        }
-                    }
-
-                    Section("Tools") {
-                        NavigationLink(value: SidebarItem.generator) {
-                            Label("Generator", systemImage: "wand.and.stars")
-                                .foregroundColor(DesignSystem.Colors.textPrimary)
-                        }
-                    }
-
-                    Section("Settings") {
-                        NavigationLink(value: SidebarItem.backups) {
-                            Label("Backups", systemImage: "externaldrive.badge.icloud")
-                                .foregroundColor(DesignSystem.Colors.textPrimary)
-                        }
-
-                        NavigationLink(value: SidebarItem.preferences) {
-                            Label("Preferences", systemImage: "gear")
-                                .foregroundColor(DesignSystem.Colors.textPrimary)
-                        }
+            List(selection: $selection) {
+                Section("Vault") {
+                    NavigationLink(value: SidebarItem.hosts) {
+                        Label("Hosts", systemImage: "server.rack")
+                            .foregroundColor(DesignSystem.Colors.textPrimary)
                     }
                 }
-                .listStyle(.sidebar)
-                .scrollContentBackground(.hidden)
-                .safeAreaInset(edge: .top) {
-                    Color.clear.frame(height: DesignSystem.Spacing.large)
+
+                Section("Tools") {
+                    NavigationLink(value: SidebarItem.generator) {
+                        Label("Generator", systemImage: "wand.and.stars")
+                            .foregroundColor(DesignSystem.Colors.textPrimary)
+                    }
                 }
 
-                // Custom neon border
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(DesignSystem.Colors.border, lineWidth: 1)
-                    .padding(2)
-                    .allowsHitTesting(false)
+                Section("Settings") {
+                    NavigationLink(value: SidebarItem.backups) {
+                        Label("Backups", systemImage: "externaldrive.badge.icloud")
+                            .foregroundColor(DesignSystem.Colors.textPrimary)
+                    }
+
+                    NavigationLink(value: SidebarItem.preferences) {
+                        Label("Preferences", systemImage: "gear")
+                            .foregroundColor(DesignSystem.Colors.textPrimary)
+                    }
+                }
             }
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .listStyle(.sidebar)
             .preferredColorScheme(themeManager.currentTheme.colorScheme)
             .tint(DesignSystem.Colors.accent)
         } detail: {
@@ -166,11 +77,7 @@ struct MainView: View {
                 }
             }
         }
-        .toolbarBackground(DesignSystem.Colors.background, for: .windowToolbar)
-        .toolbarBackground(.visible, for: .windowToolbar)
         .preferredColorScheme(themeManager.currentTheme.colorScheme)
-        // Pass current background color so WindowStyler stays in sync with theme changes
-        .background(WindowStyler(backgroundColor: DesignSystem.Colors.background))
         .onAppear {
             let registry = sessionRegistry
             viewModel.activeSessionCount = { registry.totalActiveConnections }
