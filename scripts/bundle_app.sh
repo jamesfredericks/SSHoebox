@@ -56,6 +56,29 @@ echo "📦 Copying executable..."
 cp "${BUILD_DIR}/${APP_NAME}" "${APP_BUNDLE}/Contents/MacOS/"
 chmod +x "${APP_BUNDLE}/Contents/MacOS/${APP_NAME}"
 
+# 4b. Embed dynamic frameworks (SQLCipher)
+echo "📦 Embedding dynamic frameworks..."
+mkdir -p "${APP_BUNDLE}/Contents/Frameworks"
+SQLCIPHER_XCFRAMEWORK=".build/artifacts/sqlcipher.swift/SQLCipher/SQLCipher.xcframework"
+# Pick the slice for the current architecture
+if [ -d "${SQLCIPHER_XCFRAMEWORK}/macos-arm64_x86_64/SQLCipher.framework" ]; then
+    SQLCIPHER_FRAMEWORK="${SQLCIPHER_XCFRAMEWORK}/macos-arm64_x86_64/SQLCipher.framework"
+elif [ -d "${SQLCIPHER_XCFRAMEWORK}/macos-arm64/SQLCipher.framework" ]; then
+    SQLCIPHER_FRAMEWORK="${SQLCIPHER_XCFRAMEWORK}/macos-arm64/SQLCipher.framework"
+else
+    SQLCIPHER_FRAMEWORK=""
+fi
+
+if [ -n "${SQLCIPHER_FRAMEWORK}" ] && [ -d "${SQLCIPHER_FRAMEWORK}" ]; then
+    cp -R "${SQLCIPHER_FRAMEWORK}" "${APP_BUNDLE}/Contents/Frameworks/"
+    # Add rpath so the binary can find the embedded framework at runtime
+    install_name_tool -add_rpath "@executable_path/../Frameworks" \
+        "${APP_BUNDLE}/Contents/MacOS/${APP_NAME}" 2>/dev/null || true
+    echo "✅ Embedded SQLCipher.framework"
+else
+    echo "⚠️  SQLCipher.framework not found — run 'swift build' first to fetch artifacts"
+fi
+
 # 5. Generate Info.plist
 echo "📝 Generating Info.plist..."
 cat > "${APP_BUNDLE}/Contents/Info.plist" <<PLIST

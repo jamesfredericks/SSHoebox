@@ -110,7 +110,7 @@ public struct BiometricAuthManager {
     
     // MARK: - Keychain Helpers
     
-    /// Adds a keychain item with a SecAccessControl restriction.
+    /// Adds or updates a keychain item with a SecAccessControl restriction.
     private static func addKeychainItem(keyData: Data, access: SecAccessControl) -> OSStatus {
         let query: [String: Any] = [
             kSecClass as String:             kSecClassGenericPassword,
@@ -119,27 +119,49 @@ public struct BiometricAuthManager {
             kSecValueData as String:         keyData,
             kSecAttrAccessControl as String: access
         ]
-        return SecItemAdd(query as CFDictionary, nil)
+        let status = SecItemAdd(query as CFDictionary, nil)
+        if status == errSecDuplicateItem {
+            return updateKeychainValue(keyData: keyData)
+        }
+        return status
     }
-    
-    /// Adds a plain keychain item with no SecAccessControl (final fallback).
+
+    /// Adds or updates a plain keychain item with no SecAccessControl (final fallback).
     private static func addKeychainItemFallback(keyData: Data) -> OSStatus {
         let query: [String: Any] = [
-            kSecClass as String:         kSecClassGenericPassword,
-            kSecAttrService as String:   serviceName,
-            kSecAttrAccount as String:   keychainAccount,
-            kSecValueData as String:     keyData,
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+            kSecClass as String:              kSecClassGenericPassword,
+            kSecAttrService as String:        serviceName,
+            kSecAttrAccount as String:        keychainAccount,
+            kSecValueData as String:          keyData,
+            kSecAttrAccessible as String:     kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         ]
-        return SecItemAdd(query as CFDictionary, nil)
+        let status = SecItemAdd(query as CFDictionary, nil)
+        if status == errSecDuplicateItem {
+            return updateKeychainValue(keyData: keyData)
+        }
+        return status
     }
-    
+
+    /// Updates only the value data of an existing keychain item, without touching its access control.
+    private static func updateKeychainValue(keyData: Data) -> OSStatus {
+        let searchQuery: [String: Any] = [
+            kSecClass as String:              kSecClassGenericPassword,
+            kSecAttrService as String:        serviceName,
+            kSecAttrAccount as String:        keychainAccount,
+            kSecUseNoAuthenticationUI as String: kCFBooleanTrue as Any
+        ]
+        let attributes: [String: Any] = [kSecValueData as String: keyData]
+        return SecItemUpdate(searchQuery as CFDictionary, attributes as CFDictionary)
+    }
+
     /// Deletes any existing biometric keychain item.
     private static func deleteKeychainItem() {
+        // kSecUseNoAuthenticationUI prevents hanging if the item has biometric access control
         let query: [String: Any] = [
-            kSecClass as String:       kSecClassGenericPassword,
-            kSecAttrService as String: serviceName,
-            kSecAttrAccount as String: keychainAccount
+            kSecClass as String:                 kSecClassGenericPassword,
+            kSecAttrService as String:           serviceName,
+            kSecAttrAccount as String:           keychainAccount,
+            kSecUseNoAuthenticationUI as String: kCFBooleanTrue as Any
         ]
         SecItemDelete(query as CFDictionary)
     }
@@ -168,29 +190,15 @@ public struct BiometricAuthManager {
         // This prevents triggering two separate macOS keychain access dialogs.
         let enrollmentStage = UserDefaults.standard.integer(forKey: "biometricEnrollmentStage")
         
-        let query: [String: Any]
-        if enrollmentStage == 3 {
-            // Fallback item — no SecAccessControl, but still pass the authenticated
-            // context so macOS knows the user just passed biometric verification.
-            query = [
-                kSecClass as String:                    kSecClassGenericPassword,
-                kSecAttrService as String:              serviceName,
-                kSecAttrAccount as String:              keychainAccount,
-                kSecReturnData as String:               true,
-                kSecMatchLimit as String:               kSecMatchLimitOne,
-                kSecUseAuthenticationContext as String: context
-            ]
-        } else {
-            // Stage 1 or 2 — item was stored with SecAccessControl, use context.
-            query = [
-                kSecClass as String:                    kSecClassGenericPassword,
-                kSecAttrService as String:              serviceName,
-                kSecAttrAccount as String:              keychainAccount,
-                kSecReturnData as String:               true,
-                kSecMatchLimit as String:               kSecMatchLimitOne,
-                kSecUseAuthenticationContext as String: context
-            ]
-        }
+        let query: [String: Any] = [
+            kSecClass as String:                    kSecClassGenericPassword,
+            kSecAttrService as String:              serviceName,
+            kSecAttrAccount as String:              keychainAccount,
+            kSecReturnData as String:               true,
+            kSecMatchLimit as String:               kSecMatchLimitOne,
+            kSecUseAuthenticationContext as String: context
+        ]
+        _ = enrollmentStage // stage recorded for diagnostics; query is the same for all stages
         
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
