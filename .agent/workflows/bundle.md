@@ -17,7 +17,13 @@ The resulting app will be available at:
 
 4. Verify and Install:
 - Double-click `dist/SSHoebox.app` to test it.
-- Drag and drop `SSHoebox.app` into your `/Applications` folder to install it permanently.
+- Or install to Applications:
+```bash
+sudo cp -r dist/SSHoebox.app /Applications/
+```
 
 > [!NOTE]
 > The bundling script builds the app in **Release Mode**, which enables full optimizations and is intended for daily use.
+
+> [!NOTE]
+> `SQLCipher.framework` is automatically embedded into `Contents/Frameworks/` by the script. You do not need to do anything extra — the app will launch correctly from `/Applications` without any "Library not loaded" errors.

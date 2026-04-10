@@ -76,9 +76,11 @@ cd SSHoebox
 sudo cp -r dist/SSHoebox.app /Applications/
 ```
 
+> **SQLCipher is bundled automatically.** The script embeds `SQLCipher.framework` into the app bundle — no manual steps needed.
+
 ### Option 2: Pre-built Binary
 
-1. Download the latest `SSHoebox-v2.3.0.zip` from [Releases](https://github.com/jamesfredericks/SSHoebox/releases)
+1. Download the latest `SSHoebox-v2.2.1.zip` from [Releases](https://github.com/jamesfredericks/SSHoebox/releases)
 2. Unzip and move `SSHoebox.app` to `/Applications`
 3. Remove the quarantine flag (required for ad-hoc–signed binaries):
    ```bash
