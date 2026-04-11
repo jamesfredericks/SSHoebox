@@ -59,7 +59,7 @@ SSHoebox is a secure, native macOS application for managing SSH and SFTP connect
 
 ## Installation
 
-### Option 1: Build from Source (recommended)
+### Build from Source
 
 Building from source avoids Gatekeeper restrictions entirely and guarantees Touch ID works out of the box.
 
@@ -77,18 +77,6 @@ sudo cp -r dist/SSHoebox.app /Applications/
 ```
 
 > **SQLCipher is bundled automatically.** The script embeds `SQLCipher.framework` into the app bundle — no manual steps needed.
-
-### Option 2: Pre-built Binary
-
-1. Download the latest `SSHoebox-v2.2.1.zip` from [Releases](https://github.com/jamesfredericks/SSHoebox/releases)
-2. Unzip and move `SSHoebox.app` to `/Applications`
-3. Remove the quarantine flag (required for ad-hoc–signed binaries):
-   ```bash
-   sudo xattr -cr /Applications/SSHoebox.app
-   ```
-4. Launch `SSHoebox.app`
-
-> **Why the extra command?** SSHoebox is signed with an ad-hoc certificate rather than a paid Apple Developer ID. The `xattr -cr` command removes the macOS quarantine flag placed on downloaded files — a standard workaround for open-source Mac apps distributed outside the App Store.
 
 ## First Run
 
