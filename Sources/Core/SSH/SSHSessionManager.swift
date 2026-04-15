@@ -255,7 +255,21 @@ public class SSHSessionManager: ObservableObject {
                         self.connectionState = .connected
                         self.onConnected?()
                     }
-                    
+
+                    // Sync the actual terminal size with the server immediately after the PTY is
+                    // granted. sizeChanged fires before the connection is established, so the
+                    // initial resize call is silently dropped (stdinWriter was nil at that point).
+                    // Re-sending now keeps the server in sync with the view's real dimensions.
+                    let actualSize = await MainActor.run { self.currentTerminalSize }
+                    if actualSize.cols != terminalSize.cols || actualSize.rows != terminalSize.rows {
+                        try? await outbound.changeSize(
+                            cols: actualSize.cols,
+                            rows: actualSize.rows,
+                            pixelWidth: 0,
+                            pixelHeight: 0
+                        )
+                    }
+
                     // Handle Stdin
                     let stdinTask = Task {
                         for await data in stdinStream {
