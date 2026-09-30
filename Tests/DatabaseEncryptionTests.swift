@@ -90,3 +90,16 @@ final class DatabaseEncryptionTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: dbPath)), before)
     }
 }
+
+final class VaultMetadataTests: XCTestCase {
+    func testIdentifierIsStablePerSaltAndDistinctAcrossVaults() throws {
+        let salt = try CryptoManager.generateSalt()
+        let a = VaultMetadata(salt: salt, validation: Data([1]), version: 1)
+        let b = VaultMetadata(salt: salt, validation: Data([2]), version: nil)
+        let other = VaultMetadata(salt: try CryptoManager.generateSalt(), validation: Data([1]), version: 1)
+        
+        XCTAssertEqual(a.identifier, b.identifier)
+        XCTAssertNotEqual(a.identifier, other.identifier)
+        XCTAssertEqual(a.identifier.count, 32)
+    }
+}

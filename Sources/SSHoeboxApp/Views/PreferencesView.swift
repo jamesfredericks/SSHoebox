@@ -137,14 +137,14 @@ struct PreferencesView: View {
                             if viewModel.vaultKey != nil {
                                 viewModel.enrollBiometrics()
                                 // Sync toggle back if enrollment failed
-                                isBiometricEnabled = BiometricAuthManager.isBiometricEnrolled
+                                isBiometricEnabled = viewModel.isBiometricEnrolled
                             } else {
                                 // Vault is locked — can't enroll without the key
                                 isBiometricEnabled = false
                                 showBiometricVaultLockedAlert = true
                             }
                         } else {
-                            BiometricAuthManager.revokeBiometric()
+                            viewModel.disableBiometrics()
                         }
                     }
                 } header: {
@@ -298,7 +298,7 @@ struct PreferencesView: View {
             let savedClipboard = UserDefaults.standard.integer(forKey: "clipboardClearTimeout")
             clipboardClearTimeout = savedClipboard == 0 ? 30 : savedClipboard
             // Read biometric state fresh from the source of truth
-            isBiometricEnabled = BiometricAuthManager.isBiometricEnrolled
+            isBiometricEnabled = viewModel.isBiometricEnrolled
             loadKnownHosts()
         }
         .alert("Remove Trusted Key?", isPresented: $showDeleteKnownHostAlert, presenting: knownHostToDelete) { host in

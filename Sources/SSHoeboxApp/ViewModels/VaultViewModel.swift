@@ -28,12 +28,17 @@ class VaultViewModel: ObservableObject {
     private var agentServer: SSHAgentServer?
     
     var isBiometricAvailable: Bool { BiometricAuthManager.isBiometricAvailable() }
-    var isBiometricEnrolled: Bool { BiometricAuthManager.isBiometricEnrolled }
+    var isBiometricEnrolled: Bool {
+        vaultID.map { BiometricAuthManager.isBiometricEnrolled(vaultID: $0) } ?? false
+    }
     var biometricTypeName: String { BiometricAuthManager.biometricTypeName() }
     var biometricSymbolName: String { BiometricAuthManager.biometricSymbolName() }
     
     var dbManager: DatabaseManager?
     var vaultKey: SymmetricKey?
+    /// Identifier of the vault at the current location (nil when no metadata exists yet).
+    /// Scopes per-vault state such as the Touch ID key.
+    @Published private(set) var vaultID: String?
     private var idleMonitor: IdleMonitor?
     private var cancellables = Set<AnyCancellable>()
 
@@ -76,6 +81,17 @@ class VaultViewModel: ObservableObject {
         
         // Treat as new user if there is no DB, OR if the metadata is missing from BOTH sidecar AND Keychain.
         isNewUser = !dbExists || (!metadataExists && !keychainOK)
+        vaultID = (try? loadMetadata())?.identifier
+    }
+    
+    /// Reads the vault metadata from the sidecar, falling back to the legacy Keychain copy.
+    private func loadMetadata() throws -> VaultMetadata {
+        try JSONDecoder().decode(VaultMetadata.self, from: currentVaultMetadata())
+    }
+    
+    private static func isValidKey(_ key: SymmetricKey, for metadata: VaultMetadata) -> Bool {
+        guard let decrypted = try? CryptoManager.decrypt(metadata.validation, using: key) else { return false }
+        return String(data: decrypted, encoding: .utf8) == "SSHOEBOX_VALID"
     }
     
     /// A vault.db exists but its metadata does not (e.g. the sidecar hasn't finished syncing).
@@ -95,7 +111,8 @@ class VaultViewModel: ObservableObject {
         try? FileManager.default.removeItem(atPath: dbPath)
         try? FileManager.default.removeItem(atPath: metadataPath)
         try? KeychainManager.delete(account: "vault_metadata")
-        BiometricAuthManager.revokeBiometric()
+        if let vaultID { BiometricAuthManager.revokeBiometric(vaultID: vaultID) }
+        self.vaultID = nil
         self.dbManager = nil
         self.vaultKey = nil
         self.isUnlocked = false
@@ -128,11 +145,12 @@ class VaultViewModel: ObservableObject {
             
             self.dbManager = manager
             self.vaultKey = key
+            self.vaultID = vaultMetadata.identifier
             self.isUnlocked = true
             self.isNewUser = false
             self.errorMessage = nil
             
-            if BiometricAuthManager.isBiometricAvailable() && !BiometricAuthManager.isBiometricEnrolled {
+            if BiometricAuthManager.isBiometricAvailable() && !BiometricAuthManager.hasVaultEnrollment(vaultID: vaultMetadata.identifier) {
                 self.showBiometricSetupPrompt = true
             }
             
@@ -214,8 +232,9 @@ class VaultViewModel: ObservableObject {
             self.isUnlocked = true
             self.errorMessage = nil
             
-            // Prompt biometric enrollment if available and not yet enrolled
-            if BiometricAuthManager.isBiometricAvailable() && !BiometricAuthManager.isBiometricEnrolled {
+            // Prompt biometric enrollment if this vault has no Touch ID key of its own yet
+            self.vaultID = metadata.identifier
+            if BiometricAuthManager.isBiometricAvailable() && !BiometricAuthManager.hasVaultEnrollment(vaultID: metadata.identifier) {
                 self.showBiometricSetupPrompt = true
             }
             
@@ -237,27 +256,28 @@ class VaultViewModel: ObservableObject {
     func unlockWithBiometrics() {
         Task {
             do {
-                let key = try await BiometricAuthManager.unlockWithBiometrics()
+                let metadata = try loadMetadata()
+                let vaultID = metadata.identifier
+                let usingLegacyKey = !BiometricAuthManager.hasVaultEnrollment(vaultID: vaultID)
+                let key = try await BiometricAuthManager.unlockWithBiometrics(vaultID: vaultID)
                 
                 // Validate the key against the stored validation token
-                let metadataData: Data
-                if FileManager.default.fileExists(atPath: metadataPath) {
-                    metadataData = try Data(contentsOf: URL(fileURLWithPath: metadataPath))
-                } else {
-                    metadataData = try KeychainManager.read(account: "vault_metadata")
+                guard Self.isValidKey(key, for: metadata) else {
+                    self.errorMessage = usingLegacyKey
+                        ? "\(biometricTypeName) was set up for a different vault. Unlock with your password, then enable \(biometricTypeName) for this vault."
+                        : "Biometric unlock failed: key mismatch."
+                    return
                 }
                 
-                let metadata = try JSONDecoder().decode(VaultMetadata.self, from: metadataData)
-                let decryptedValidation = try CryptoManager.decrypt(metadata.validation, using: key)
-                guard let validationString = String(data: decryptedValidation, encoding: .utf8),
-                      validationString == "SSHOEBOX_VALID" else {
-                    self.errorMessage = "Biometric unlock failed: key mismatch."
-                    return
+                // The legacy shared key belongs to this vault: move it to a per-vault item.
+                if usingLegacyKey {
+                    try? BiometricAuthManager.enrollBiometric(vaultKey: key, vaultID: vaultID)
                 }
                 
                 let manager = try openDatabase(vaultKey: key)
                 self.dbManager = manager
                 self.vaultKey = key
+                self.vaultID = vaultID
                 self.isUnlocked = true
                 self.errorMessage = nil
                 startAutoLockMonitoring()
@@ -275,9 +295,9 @@ class VaultViewModel: ObservableObject {
     
     /// Enroll biometrics using the currently unlocked vault key.
     func enrollBiometrics() {
-        guard let key = vaultKey else { return }
+        guard let key = vaultKey, let vaultID else { return }
         do {
-            try BiometricAuthManager.enrollBiometric(vaultKey: key)
+            try BiometricAuthManager.enrollBiometric(vaultKey: key, vaultID: vaultID)
             self.showBiometricSetupPrompt = false
             self.errorMessage = nil
         } catch {
@@ -288,7 +308,8 @@ class VaultViewModel: ObservableObject {
     
     /// Disable biometric unlock and remove the stored key.
     func disableBiometrics() {
-        BiometricAuthManager.revokeBiometric()
+        guard let vaultID else { return }
+        BiometricAuthManager.revokeBiometric(vaultID: vaultID)
     }
     
     private func performMetadataEncryption(db: DatabaseManager, key: SymmetricKey) throws {
@@ -462,15 +483,11 @@ class VaultViewModel: ObservableObject {
     /// The user must unlock again with the password that was in use when the backup was made.
     func restoreBackup(_ data: Data) throws {
         let backup = try BackupManager.verify(data)
-        let previousMetadata = try? currentVaultMetadata()
         
         lock()
         try BackupManager.install(backup, databasePath: dbPath, metadataPath: metadataPath)
-        
-        // A Touch ID key enrolled for a different vault would only produce "key mismatch" errors.
-        if let restored = backup.vaultMetadata, restored != previousMetadata {
-            BiometricAuthManager.revokeBiometric()
-        }
+        // Touch ID keys are per vault, so a restored vault with different metadata simply
+        // has no enrollment until the user enables it again.
         checkIfVaultExists()
     }
     
