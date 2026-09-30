@@ -78,6 +78,18 @@ class VaultViewModel: ObservableObject {
         isNewUser = !dbExists || (!metadataExists && !keychainOK)
     }
     
+    /// A vault.db exists but its metadata does not (e.g. the sidecar hasn't finished syncing).
+    /// Creating a vault over it would make the existing data undecryptable.
+    var hasOrphanedDatabase: Bool {
+        isNewUser && FileManager.default.fileExists(atPath: dbPath)
+    }
+    
+    /// Opens the vault database with the SQLCipher key derived from the vault key,
+    /// migrating a legacy plaintext database in place if needed.
+    private func openDatabase(vaultKey: SymmetricKey) throws -> DatabaseManager {
+        try DatabaseManager(path: dbPath, key: CryptoManager.databaseKey(from: vaultKey))
+    }
+    
     /// Wipes the existing vault and Keychain entry so the user can start fresh.
     func forceNewVault() {
         try? FileManager.default.removeItem(atPath: dbPath)
@@ -92,22 +104,44 @@ class VaultViewModel: ObservableObject {
     }
     
     func createVault(password: String) {
+        guard !hasOrphanedDatabase else {
+            self.errorMessage = "A vault database already exists in this folder but its vault_metadata.json is missing. If it is still syncing, wait and relaunch; otherwise use \"Create New Vault…\" to replace it."
+            return
+        }
         do {
             let salt = try CryptoManager.generateSalt()
             let key = try CryptoManager.deriveKey(password: password, salt: salt)
+            
+            let manager = try openDatabase(vaultKey: key)
             
             // Save metadata to portable JSON sidecar instead of Keychain
             let validationData = try CryptoManager.encrypt("SSHOEBOX_VALID".data(using: .utf8)!, using: key)
             let vaultMetadata = VaultMetadata(salt: salt, validation: validationData, version: 1)
             let metadataData = try JSONEncoder().encode(vaultMetadata)
-            try metadataData.write(to: URL(fileURLWithPath: metadataPath))
+            do {
+                try metadataData.write(to: URL(fileURLWithPath: metadataPath), options: .atomic)
+            } catch {
+                // Without metadata the new database can never be opened; don't leave it behind.
+                try? FileManager.default.removeItem(atPath: dbPath)
+                throw error
+            }
             
+            self.dbManager = manager
+            self.vaultKey = key
             self.isUnlocked = true
             self.isNewUser = false
             self.errorMessage = nil
             
+            if BiometricAuthManager.isBiometricAvailable() && !BiometricAuthManager.isBiometricEnrolled {
+                self.showBiometricSetupPrompt = true
+            }
+            
             // Start auto-lock monitoring
             startAutoLockMonitoring()
+            
+            if isAgentEnabled {
+                startAgent()
+            }
             
         } catch {
             self.errorMessage = "Failed to create vault: \(error.localizedDescription)"
@@ -164,7 +198,7 @@ class VaultViewModel: ObservableObject {
             // 4. Open DB
             failedUnlockAttempts = 0
             lockoutUntil = nil
-            let manager = try DatabaseManager(path: dbPath)
+            let manager = try openDatabase(vaultKey: key)
             self.dbManager = manager
             self.vaultKey = key
             
@@ -221,7 +255,7 @@ class VaultViewModel: ObservableObject {
                     return
                 }
                 
-                let manager = try DatabaseManager(path: dbPath)
+                let manager = try openDatabase(vaultKey: key)
                 self.dbManager = manager
                 self.vaultKey = key
                 self.isUnlocked = true
@@ -372,40 +406,71 @@ class VaultViewModel: ObservableObject {
     // MARK: - Portable Vault Management
     
     func moveVault(to url: URL) throws {
-        // Ensure folder exists
-        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        let source = vaultDirectoryURL.standardizedFileURL.resolvingSymlinksInPath()
+        let destination = url.standardizedFileURL.resolvingSymlinksInPath()
+        guard source != destination else { return }
         
-        let newDbURL = url.appendingPathComponent("vault.db")
-        let newMetadataURL = url.appendingPathComponent("vault_metadata.json")
+        let fm = FileManager.default
+        try fm.createDirectory(at: destination, withIntermediateDirectories: true)
         
-        let oldDbURL = URL(fileURLWithPath: dbPath)
-        let oldMetadataURL = URL(fileURLWithPath: metadataPath)
+        let fileNames = ["vault.db", "vault_metadata.json"]
+        for name in fileNames where fm.fileExists(atPath: destination.appendingPathComponent(name).path) {
+            throw VaultError.destinationHasVault
+        }
         
         self.lock()
         
-        if FileManager.default.fileExists(atPath: oldDbURL.path) {
-            // Need to handle rewriting if exists
-            if FileManager.default.fileExists(atPath: newDbURL.path) {
-                try FileManager.default.removeItem(at: newDbURL)
+        // Copy everything first; only delete the originals once every copy has succeeded.
+        let filesToMove = (fileNames + ["vault.db-journal", "vault.db-wal", "vault.db-shm"])
+            .filter { fm.fileExists(atPath: source.appendingPathComponent($0).path) }
+        var copied: [URL] = []
+        do {
+            for name in filesToMove {
+                let target = destination.appendingPathComponent(name)
+                try fm.copyItem(at: source.appendingPathComponent(name), to: target)
+                copied.append(target)
             }
-            try FileManager.default.moveItem(at: oldDbURL, to: newDbURL)
+        } catch {
+            copied.forEach { try? fm.removeItem(at: $0) }
+            throw error
         }
         
-        if FileManager.default.fileExists(atPath: oldMetadataURL.path) {
-            if FileManager.default.fileExists(atPath: newMetadataURL.path) {
-                try FileManager.default.removeItem(at: newMetadataURL)
-            }
-            try FileManager.default.moveItem(at: oldMetadataURL, to: newMetadataURL)
+        UserDefaults.standard.set(destination.path, forKey: "vaultDirectoryRaw")
+        for name in filesToMove {
+            try? fm.removeItem(at: source.appendingPathComponent(name))
         }
-        
-        // Save new setting
-        UserDefaults.standard.set(url.path, forKey: "vaultDirectoryRaw")
         checkIfVaultExists()
     }
     
     func openExistingVault(at url: URL) {
         self.lock()
         UserDefaults.standard.set(url.path, forKey: "vaultDirectoryRaw")
+        checkIfVaultExists()
+    }
+    
+    // MARK: - Backup
+    
+    /// Current `vault_metadata.json` contents, falling back to the legacy Keychain copy.
+    func currentVaultMetadata() throws -> Data {
+        if FileManager.default.fileExists(atPath: metadataPath) {
+            return try Data(contentsOf: URL(fileURLWithPath: metadataPath))
+        }
+        return try KeychainManager.read(account: "vault_metadata")
+    }
+    
+    /// Validates a backup, locks the vault, and replaces the database and metadata with it.
+    /// The user must unlock again with the password that was in use when the backup was made.
+    func restoreBackup(_ data: Data) throws {
+        let backup = try BackupManager.verify(data)
+        let previousMetadata = try? currentVaultMetadata()
+        
+        lock()
+        try BackupManager.install(backup, databasePath: dbPath, metadataPath: metadataPath)
+        
+        // A Touch ID key enrolled for a different vault would only produce "key mismatch" errors.
+        if let restored = backup.vaultMetadata, restored != previousMetadata {
+            BiometricAuthManager.revokeBiometric()
+        }
         checkIfVaultExists()
     }
     
@@ -447,8 +512,13 @@ class VaultViewModel: ObservableObject {
     }
 }
 
-struct VaultMetadata: Codable {
-    let salt: Data
-    let validation: Data
-    var version: Int? // Optional for backward compatibility. Nil means 0 (Legacy).
+enum VaultError: LocalizedError {
+    case destinationHasVault
+    
+    var errorDescription: String? {
+        switch self {
+        case .destinationHasVault:
+            return "The selected folder already contains a vault. Use \"Open Existing Vault…\" to switch to it, or choose an empty folder."
+        }
+    }
 }

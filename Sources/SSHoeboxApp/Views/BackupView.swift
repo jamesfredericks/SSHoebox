@@ -29,7 +29,7 @@ struct BackupView: View {
             Section {
                 Button {
                     do {
-                        let data = try backupManager.createExportData()
+                        let data = try backupManager.createExportData(vaultMetadata: vaultViewModel.currentVaultMetadata())
                         exportData = BackupDocument(data: data)
                         showingExporter = true
                     } catch {
@@ -141,15 +141,21 @@ struct BackupView: View {
         }
         defer { url.stopAccessingSecurityScopedResource() }
         
+        let data: Data
         do {
-            let data = try Data(contentsOf: url)
-            try backupManager.restore(from: data)
-            // Lock the vault so the user re-enters their password.
-            // This forces the app to re-derive the vault key from the
-            // freshly-restored Keychain salt, fixing the garbage-data issue.
-            vaultViewModel.lock()
+            data = try Data(contentsOf: url)
+            _ = try BackupManager.verify(data)
         } catch {
             errorMessage = "Restore failed: \(error.localizedDescription)"
+            return
+        }
+        
+        // restoreBackup locks the vault (dismissing this view), so later errors are
+        // reported on the unlock screen. The user then unlocks with the backup's password.
+        do {
+            try vaultViewModel.restoreBackup(data)
+        } catch {
+            vaultViewModel.errorMessage = "Restore failed: \(error.localizedDescription)"
         }
     }
     
@@ -158,7 +164,7 @@ struct BackupView: View {
             do {
                 guard backupFolder != "No folder selected" else { return }
                 
-                let data = try backupManager.createExportData()
+                let data = try backupManager.createExportData(vaultMetadata: vaultViewModel.currentVaultMetadata())
                 let folder = backupFolder // Capture for detached task
                 
                 // OFF-LOAD: Move direct file operations to a detached task

@@ -72,8 +72,8 @@ struct VaultUnlockView: View {
                         .tint(DesignSystem.Colors.accent)
                     }
                     
-                    // Recovery option — shown on unlock screen only
-                    if !viewModel.isNewUser {
+                    // Recovery option — shown on unlock screen, or when an orphaned vault.db blocks creation
+                    if !viewModel.isNewUser || viewModel.hasOrphanedDatabase {
                         Button("Create New Vault…") {
                             showingNewVaultConfirm = true
                         }
