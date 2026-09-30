@@ -33,7 +33,7 @@ final class CryptoTests: XCTestCase {
     
     func testKeyDerivationConsistency() throws {
         let password = "MySecurePassword123"
-        let salt = CryptoManager.generateSalt()
+        let salt = try CryptoManager.generateSalt()
         
         let key1 = try CryptoManager.deriveKey(password: password, salt: salt)
         let key2 = try CryptoManager.deriveKey(password: password, salt: salt)
@@ -43,8 +43,8 @@ final class CryptoTests: XCTestCase {
     
     func testKeyDerivationUniqueness() throws {
         let password = "MySecurePassword123"
-        let salt1 = CryptoManager.generateSalt()
-        let salt2 = CryptoManager.generateSalt()
+        let salt1 = try CryptoManager.generateSalt()
+        let salt2 = try CryptoManager.generateSalt()
         
         let key1 = try CryptoManager.deriveKey(password: password, salt: salt1)
         let key2 = try CryptoManager.deriveKey(password: password, salt: salt2)

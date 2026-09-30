@@ -41,6 +41,18 @@ public struct CryptoManager {
         return string
     }
     
+    /// Derives the raw 32-byte SQLCipher database key from the vault key.
+    /// HKDF with a distinct `info` label keeps the database key independent of the
+    /// key used for field-level AES-GCM encryption.
+    public static func databaseKey(from vaultKey: SymmetricKey) -> Data {
+        let derived = HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: vaultKey,
+            info: Data("com.sshoebox.sqlcipher.v1".utf8),
+            outputByteCount: 32
+        )
+        return derived.withUnsafeBytes { Data($0) }
+    }
+
     /// Derives a key from a password and salt using PBKDF2-HMAC-SHA256.
     /// - Parameters:
     ///   - password: The user's master password.
