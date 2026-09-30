@@ -199,10 +199,9 @@ class VaultViewModel: ObservableObject {
             // 2. Derive Key
             let key = try CryptoManager.deriveKey(password: password, salt: metadata.salt)
             
-            // 3. Verify Key
-            let decryptedValidation = try CryptoManager.decrypt(metadata.validation, using: key)
-            guard let validationString = String(data: decryptedValidation, encoding: .utf8),
-                  validationString == "SSHOEBOX_VALID" else {
+            // 3. Verify Key. A wrong password fails AES-GCM authentication, which must count
+            // as a failed attempt rather than escaping to the generic catch below.
+            guard Self.isValidKey(key, for: metadata) else {
                 recordFailedUnlock()
                 if let lockout = lockoutUntil, lockout > Date() {
                     let remaining = Int(lockout.timeIntervalSinceNow.rounded(.up))
