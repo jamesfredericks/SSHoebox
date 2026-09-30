@@ -131,7 +131,16 @@ public class SFTPSessionManager: ObservableObject {
         isLoading = true
         errorMessage = nil
 
-        let (validator, capturer) = buildValidator(for: host, port: port)
+        let validator: SSHHostKeyValidator
+        let capturer: CapturingHostKeyValidator?
+        do {
+            (validator, capturer) = try HostKeyTrust.validator(for: host, port: port, repository: knownHostRepository)
+        } catch {
+            connectionState = .failed(error.localizedDescription)
+            errorMessage = error.localizedDescription
+            isLoading = false
+            return
+        }
         var settings = SSHClientSettings(
             host: host,
             port: port,
@@ -151,7 +160,12 @@ public class SFTPSessionManager: ObservableObject {
                 let keyType     = String(openSSHStr.split(separator: " ").first ?? "unknown")
                 let record = KnownHost(hostname: host, port: port, keyType: keyType,
                                        keyFingerprint: fingerprint, openSSHPublicKey: openSSHStr)
-                try? repo.save(record)
+                do {
+                    try repo.save(record)
+                } catch {
+                    // Still TOFU for this session; the key will be offered for trust again next time.
+                    print("SFTP: could not store host key for \(host):\(port): \(error)")
+                }
             }
 
             let sftp = try await client.openSFTP()
@@ -171,16 +185,6 @@ public class SFTPSessionManager: ObservableObject {
             errorMessage = error.localizedDescription
             isLoading = false
         }
-    }
-
-    private func buildValidator(for host: String, port: Int) -> (SSHHostKeyValidator, CapturingHostKeyValidator?) {
-        guard let repo = knownHostRepository else { return (.acceptAnything(), nil) }
-        if let record = try? repo.find(hostname: host, port: port),
-           let key = try? NIOSSHPublicKey(openSSHPublicKey: record.openSSHPublicKey) {
-            return (.trustedKeys([key]), nil)
-        }
-        let capturer = CapturingHostKeyValidator()
-        return (.custom(capturer), capturer)
     }
 
     // MARK: - Navigation

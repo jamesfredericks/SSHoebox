@@ -64,7 +64,7 @@ public class SSHSessionManager: ObservableObject {
         password: String,
         terminalSize: (cols: Int, rows: Int) = (80, 24)
     ) async {
-        let (validator, capturer) = buildValidator(for: host, port: port)
+        guard let (validator, capturer) = buildValidator(for: host, port: port) else { return }
         var settings = SSHClientSettings(
             host: host,
             port: port,
@@ -84,7 +84,7 @@ public class SSHSessionManager: ObservableObject {
         ed25519Key: Curve25519.Signing.PrivateKey,
         terminalSize: (cols: Int, rows: Int) = (80, 24)
     ) async {
-        let (validator, capturer) = buildValidator(for: host, port: port)
+        guard let (validator, capturer) = buildValidator(for: host, port: port) else { return }
         var settings = SSHClientSettings(
             host: host,
             port: port,
@@ -139,7 +139,7 @@ public class SSHSessionManager: ObservableObject {
         username: String,
         terminalSize: (cols: Int, rows: Int) = (80, 24)
     ) async {
-        let (validator, capturer) = buildValidator(for: host, port: port)
+        guard let (validator, capturer) = buildValidator(for: host, port: port) else { return }
         let delegate = KeyboardInteractiveDelegate(username: username)
         delegate.onOutput = self.onOutput
         var settings = SSHClientSettings(
@@ -154,27 +154,21 @@ public class SSHSessionManager: ObservableObject {
 
     // MARK: - Host Key Validation (TOFU)
 
-    /// Builds an `SSHHostKeyValidator` for the given host.
-    ///
-    /// - If a known host record exists in the repository, returns `.trustedKeys` using
-    ///   the stored key. The connection will fail with `InvalidHostKey` if the server
-    ///   presents a different key.
-    /// - If no record exists, returns a `CapturingHostKeyValidator` that trusts the
-    ///   first-seen key. The caller is responsible for persisting the captured key after
-    ///   the connection succeeds (see `startSession`).
+    /// Builds the host key validator for `host:port` (see `HostKeyTrust.validator`).
+    /// Returns nil, after reporting the reason and marking the session failed, when the
+    /// trust state can't be determined; the caller must not connect in that case.
     private func buildValidator(
         for host: String,
         port: Int
-    ) -> (SSHHostKeyValidator, CapturingHostKeyValidator?) {
-        guard let repo = knownHostRepository else {
-            return (.acceptAnything(), nil)
+    ) -> (SSHHostKeyValidator, CapturingHostKeyValidator?)? {
+        do {
+            return try HostKeyTrust.validator(for: host, port: port, repository: knownHostRepository)
+        } catch {
+            log("⚠  \(error.localizedDescription)", color: "31")
+            connectionState = .failed(error.localizedDescription)
+            onDisconnect?()
+            return nil
         }
-        if let knownHost = try? repo.find(hostname: host, port: port),
-           let storedKey = try? NIOSSHPublicKey(openSSHPublicKey: knownHost.openSSHPublicKey) {
-            return (.trustedKeys([storedKey]), nil)
-        }
-        let capturer = CapturingHostKeyValidator()
-        return (.custom(capturer), capturer)
     }
     
     public func log(_ msg: String, color: String = "36") {
@@ -222,9 +216,20 @@ public class SSHSessionManager: ObservableObject {
                         keyFingerprint: fingerprint,
                         openSSHPublicKey: openSSHStr
                     )
-                    try? repo.save(knownHost)
+                    let saveError: Error?
+                    do {
+                        try repo.save(knownHost)
+                        saveError = nil
+                    } catch {
+                        saveError = error
+                    }
                     await MainActor.run {
-                        self.log("New host key stored (Trust On First Use).", color: "32")
+                        if let saveError {
+                            self.log("Warning: could not store the host key (\(saveError.localizedDescription)).", color: "33")
+                            self.log("It was accepted for this session only and will be trusted on first use again.", color: "33")
+                        } else {
+                            self.log("New host key stored (Trust On First Use).", color: "32")
+                        }
                         self.log("  Type:        \(keyType)", color: "32")
                         self.log("  Fingerprint: \(fingerprint)", color: "32")
                     }
