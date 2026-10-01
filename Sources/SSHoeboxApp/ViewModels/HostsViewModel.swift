@@ -11,6 +11,9 @@ class HostsViewModel: ObservableObject {
     @Published var searchQuery: String = ""
     @Published var collapsedGroups: Set<String> = []
 
+    /// Called with a host's id after it is deleted, so its open sessions can be ended.
+    var onHostDeleted: ((String) -> Void)?
+
     private let dbManager: DatabaseManager
     private let repository: HostRepository
     private let groupRepository: GroupRepository
@@ -154,6 +157,7 @@ class HostsViewModel: ObservableObject {
             let host = hosts[index]
             do {
                 try repository.delete(host)
+                onHostDeleted?(host.id)
             } catch {
                 errorMessage = "Failed to delete host: \(error.localizedDescription)"
             }
@@ -164,6 +168,7 @@ class HostsViewModel: ObservableObject {
     func deleteHost(_ host: SavedHost) {
         do {
             try repository.delete(host)
+            onHostDeleted?(host.id)
             fetchHosts()
         } catch {
             errorMessage = "Failed to delete host: \(error.localizedDescription)"

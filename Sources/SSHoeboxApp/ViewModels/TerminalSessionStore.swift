@@ -4,9 +4,10 @@ import SSHoeboxCore
 import CryptoKit
 
 /// A long-lived registry that holds one TerminalSessionStore per host.
-/// Owned as a @StateObject on MainView and injected as an @EnvironmentObject
+/// Owned as a @StateObject on SSHoeboxApp and injected as an @EnvironmentObject
 /// so session stores survive sidebar navigation, host-list refreshes, and
-/// any other view recreation throughout the app's lifetime.
+/// any other view recreation while the vault is unlocked. Every store holds the
+/// vault key, so `removeAll()` runs when the vault locks.
 @MainActor
 class TerminalSessionRegistry: ObservableObject {
     private var stores: [String: TerminalSessionStore] = [:]
@@ -38,6 +39,13 @@ class TerminalSessionRegistry: ObservableObject {
             store.disconnectAll()
         }
         stores.removeValue(forKey: hostId)
+    }
+
+    /// Ends every session and drops every store, releasing their copies of the vault key
+    /// and database handle. Called when the vault locks.
+    func removeAll() {
+        stores.values.forEach { $0.disconnectAll() }
+        stores.removeAll()
     }
 }
 

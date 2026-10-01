@@ -48,6 +48,9 @@ class VaultViewModel: ObservableObject {
 
     /// Provided by MainView so auto-lock can defer while SSH sessions are active.
     var activeSessionCount: (() -> Int)?
+
+    /// Provided by SSHoeboxApp to end terminal sessions, which hold their own copy of the vault key.
+    var onLock: (() -> Void)?
     
     // Path to the vault directory
     var vaultDirectoryURL: URL {
@@ -337,6 +340,10 @@ class VaultViewModel: ObservableObject {
         self.isUnlocked = false
         self.vaultKey = nil
         self.dbManager = nil
+
+        // End SSH sessions and clear any secret still on the clipboard
+        onLock?()
+        ClipboardManager.shared.clearNow()
         
         // Stop auto-lock monitoring
         stopAutoLockMonitoring()

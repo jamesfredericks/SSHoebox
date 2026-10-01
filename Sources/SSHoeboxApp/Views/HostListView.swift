@@ -5,6 +5,7 @@ import CryptoKit
 struct HostListView: View {
     @ObservedObject private var themeManager = ThemeManager.shared
     @StateObject private var viewModel: HostsViewModel
+    @EnvironmentObject private var sessionRegistry: TerminalSessionRegistry
     let dbManager: DatabaseManager
     let vaultKey: SymmetricKey
     @State private var showingAddHost = false
@@ -103,6 +104,10 @@ struct HostListView: View {
         }
         .sheet(isPresented: $showingImportCredentials, onDismiss: { viewModel.fetchHosts() }) {
             ImportCredentialsSheet(viewModel: viewModel)
+        }
+        .onAppear {
+            let registry = sessionRegistry
+            viewModel.onHostDeleted = { [weak registry] hostId in registry?.removeStore(for: hostId) }
         }
     }
 
