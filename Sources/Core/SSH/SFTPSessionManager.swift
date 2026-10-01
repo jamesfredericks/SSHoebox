@@ -69,6 +69,8 @@ public class SFTPSessionManager: ObservableObject {
 
     private var sshClient: SSHClient?
     private var sftpClient: SFTPClient?
+    /// Bumped by `disconnect()` so a connect still in flight knows to close what it opened.
+    private var generation = 0
 
     /// Set before calling connect to enable TOFU host key validation.
     public var knownHostRepository: KnownHostRepository?
@@ -127,6 +129,7 @@ public class SFTPSessionManager: ObservableObject {
         port: Int,
         configure: (SSHClientSettings) -> SSHClientSettings
     ) async {
+        let gen = generation
         connectionState = .connecting
         isLoading = true
         errorMessage = nil
@@ -150,8 +153,10 @@ public class SFTPSessionManager: ObservableObject {
         settings.algorithms = .all
         settings = configure(settings)
 
+        var openedClient: SSHClient?
         do {
             let client = try await SSHClient.connect(to: settings)
+            openedClient = client
 
             // Persist TOFU key on first connection
             if let key = capturer?.capturedKey, let repo = knownHostRepository {
@@ -171,16 +176,26 @@ public class SFTPSessionManager: ObservableObject {
             let sftp = try await client.openSFTP()
             let home = (try? await sftp.getRealPath(atPath: ".")) ?? "/"
 
+            // The browser was closed while connecting: don't keep a connection nobody owns.
+            guard generation == gen else {
+                try? await sftp.close()
+                try? await client.close()
+                return
+            }
             self.sshClient = client
             self.sftpClient = sftp
             self.connectionState = .connected
             await loadDirectory(at: home)
 
         } catch is InvalidHostKey {
+            try? await openedClient?.close()
+            guard generation == gen else { return }
             connectionState = .failed("Host key mismatch")
             errorMessage = "Host key mismatch — remove the entry from Preferences → Known Hosts and reconnect."
             isLoading = false
         } catch {
+            try? await openedClient?.close()
+            guard generation == gen else { return }
             connectionState = .failed(error.localizedDescription)
             errorMessage = error.localizedDescription
             isLoading = false
@@ -294,7 +309,9 @@ public class SFTPSessionManager: ObservableObject {
         let ssh  = sshClient
         sftpClient = nil
         sshClient  = nil
+        generation += 1
         connectionState = .disconnected
+        isLoading  = false
         entries    = []
         currentPath = "/"
         Task {

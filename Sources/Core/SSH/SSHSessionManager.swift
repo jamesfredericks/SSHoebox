@@ -26,6 +26,9 @@ public class SSHSessionManager: ObservableObject {
     
     private var client: SSHClient?
     private var sessionTask: Task<Void, Never>?
+    /// Bumped whenever a session starts or is torn down. A session task compares it with the
+    /// value it started with, so a superseded connection never updates this manager's state.
+    private var generation = 0
     
     // Stdin pipe: we write to this continuation to send data to the SSH channel
     private var stdinContinuation: AsyncStream<Data>.Continuation?
@@ -188,7 +191,11 @@ public class SSHSessionManager: ObservableObject {
         terminalSize: (cols: Int, rows: Int),
         capturer: CapturingHostKeyValidator? = nil
     ) async {
-        await MainActor.run { connectionState = .connecting }
+        // A reconnect replaces any previous session, so close its connection first.
+        tearDown()
+        generation += 1
+        let gen = generation
+        connectionState = .connecting
 
         // Snapshot repo reference for use inside the Task (avoids actor isolation issues)
         let repoSnapshot = knownHostRepository
@@ -199,9 +206,18 @@ public class SSHSessionManager: ObservableObject {
 
         sessionTask = Task { [weak self] in
             guard let self else { return }
+            var openedClient: SSHClient?
             do {
                 await MainActor.run { self.log("Connecting to \(settings.host):\(settings.port)...") }
                 let sshClient = try await SSHClient.connect(to: settings)
+                openedClient = sshClient
+
+                // Disconnected (or reconnected) while the handshake was in flight.
+                guard self.generation == gen else {
+                    try? await sshClient.close()
+                    return
+                }
+                self.client = sshClient
 
                 // If this was a first-time connection, persist the captured key and log the fingerprint.
                 // validateHostKey fires before SSHClient.connect returns, so capturedKey is set here.
@@ -234,8 +250,7 @@ public class SSHSessionManager: ObservableObject {
                         self.log("  Fingerprint: \(fingerprint)", color: "32")
                     }
                 }
-                await MainActor.run { 
-                    self.client = sshClient
+                await MainActor.run {
                     self.log("TCP Connected & Authenticated.", color: "32")
                 }
                 
@@ -254,6 +269,7 @@ public class SSHSessionManager: ObservableObject {
                 
                 
                 try await sshClient.withPTY(ptyRequest) { inbound, outbound in
+                    guard await MainActor.run(body: { self.generation == gen }) else { return }
                     await MainActor.run {
                         self.log("PTY Granted. Starting Shell...", color: "32")
                         self.stdinWriter = outbound
@@ -290,25 +306,28 @@ public class SSHSessionManager: ObservableObject {
                         switch output {
                         case .stdout(let buffer):
                             let data = Data(buffer.readableBytesView)
-                            await MainActor.run { self.onOutput?(data) }
+                            await MainActor.run { if self.generation == gen { self.onOutput?(data) } }
                         case .stderr(let buffer):
                             let data = Data(buffer.readableBytesView)
-                            await MainActor.run { self.onOutput?(data) }
+                            await MainActor.run { if self.generation == gen { self.onOutput?(data) } }
                         }
                     }
                     
                     
                     stdinTask.cancel()
-                    
-                    await MainActor.run {
-                        self.stdinWriter = nil
-                        self.connectionState = .disconnected
-                        self.onDisconnect?()
-                    }
                 }
-                
-                
+
+                // The remote shell exited: close the SSH connection, not just the channel.
+                try? await sshClient.close()
+                guard self.generation == gen else { return }
+                self.client = nil
+                self.stdinWriter = nil
+                self.connectionState = .disconnected
+                self.onDisconnect?()
             } catch is InvalidHostKey {
+                try? await openedClient?.close()
+                guard self.generation == gen else { return }
+                self.client = nil
                 await MainActor.run {
                     self.log("", color: "31")
                     self.log("⚠  WARNING: HOST KEY VERIFICATION FAILED", color: "31")
@@ -321,6 +340,11 @@ public class SSHSessionManager: ObservableObject {
                     self.onDisconnect?()
                 }
             } catch {
+                try? await openedClient?.close()
+                // A deliberate disconnect makes the in-flight session throw; that isn't a failure.
+                guard self.generation == gen else { return }
+                self.client = nil
+                self.stdinWriter = nil
                 await MainActor.run {
                     let detailedError = String(describing: error)
                     let errorType = String(describing: type(of: error))
@@ -354,17 +378,33 @@ public class SSHSessionManager: ObservableObject {
     // MARK: - Disconnect
     
     public func disconnect() {
-        stdinContinuation?.finish()
-        stdinContinuation = nil
-        sessionTask?.cancel()
-        sessionTask = nil
-        client = nil
+        tearDown()
+        passphraseChallenge = nil
         connectionState = .disconnected
         onDisconnect?()
+    }
+
+    /// Ends the current session, if any, and closes its SSH connection. Citadel's `SSHClient`
+    /// doesn't close itself on release, so dropping the reference alone would leave the
+    /// TCP connection (and the authenticated session) open.
+    private func tearDown() {
+        generation += 1
+        stdinContinuation?.finish()
+        stdinContinuation = nil
+        stdinWriter = nil
+        sessionTask?.cancel()
+        sessionTask = nil
+        if let client {
+            Task { try? await client.close() }
+        }
+        client = nil
     }
     
     deinit {
         sessionTask?.cancel()
+        if let client {
+            Task { try? await client.close() }
+        }
     }
 }
 
