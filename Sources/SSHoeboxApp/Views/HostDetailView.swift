@@ -111,6 +111,9 @@ struct HostDetailView: View {
             if newTab == .files && sftpManager.connectionState == .disconnected {
                 Task { await connectSFTP() }
             }
+            if newTab == .terminal {
+                openTerminalIfNeeded()
+            }
         }
     }
     
@@ -265,6 +268,16 @@ struct HostDetailView: View {
             }
         } else {
             selectedTab = .terminal
+            // onChange doesn't fire if the Terminal tab was already showing
+            openTerminalIfNeeded()
+        }
+    }
+
+    /// Opens the first terminal session the first time the user asks for the terminal.
+    private func openTerminalIfNeeded() {
+        let store = sessionRegistry.store(for: host, dbManager: dbManager, vaultKey: vaultKey)
+        if store.sessions.isEmpty {
+            store.openNewSession()
         }
     }
 
