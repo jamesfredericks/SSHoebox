@@ -93,6 +93,7 @@ public class SFTPSessionManager: ObservableObject {
     // MARK: - Connect (PEM key — Ed25519 only for SFTP)
 
     public func connect(host: String, port: Int, username: String, pemKey: String, passphrase: String? = nil) async {
+        let pemKey = SSHKeyParser.normalizedPEM(pemKey)
         let decryptionKey = passphrase.flatMap { $0.data(using: .utf8) }
 
         if let edKey = try? Curve25519.Signing.PrivateKey(sshEd25519: pemKey, decryptionKey: decryptionKey) {

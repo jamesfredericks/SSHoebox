@@ -110,6 +110,7 @@ public class SSHSessionManager: ObservableObject {
         passphrase: String? = nil,
         terminalSize: (cols: Int, rows: Int) = (80, 24)
     ) async {
+        let pemKey = SSHKeyParser.normalizedPEM(pemKey)
         let decryptionKey = passphrase.flatMap { $0.data(using: .utf8) }
 
         if let ed25519Key = try? Curve25519.Signing.PrivateKey(sshEd25519: pemKey, decryptionKey: decryptionKey) {
