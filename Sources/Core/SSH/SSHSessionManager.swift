@@ -76,7 +76,7 @@ public class SSHSessionManager: ObservableObject {
             authenticationMethod: { .passwordBased(username: username, password: password) },
             hostKeyValidator: validator
         )
-        settings.algorithms = .all
+        settings.algorithms = SSHAlgorithmPolicy.algorithms
         await startSession(settings: settings, terminalSize: terminalSize, capturer: capturer)
     }
 
@@ -96,7 +96,7 @@ public class SSHSessionManager: ObservableObject {
             authenticationMethod: { .ed25519(username: username, privateKey: ed25519Key) },
             hostKeyValidator: validator
         )
-        settings.algorithms = .all
+        settings.algorithms = SSHAlgorithmPolicy.algorithms
         await startSession(settings: settings, terminalSize: terminalSize, capturer: capturer)
     }
 
@@ -153,7 +153,7 @@ public class SSHSessionManager: ObservableObject {
             authenticationMethod: { .custom(delegate) },
             hostKeyValidator: validator
         )
-        settings.algorithms = .all
+        settings.algorithms = SSHAlgorithmPolicy.algorithms
         await startSession(settings: settings, terminalSize: terminalSize, capturer: capturer)
     }
 

@@ -150,7 +150,7 @@ public class SFTPSessionManager: ObservableObject {
             authenticationMethod: { .passwordBased(username: "", password: "") },
             hostKeyValidator: validator
         )
-        settings.algorithms = .all
+        settings.algorithms = SSHAlgorithmPolicy.algorithms
         settings = configure(settings)
 
         var openedClient: SSHClient?
