@@ -22,6 +22,11 @@ enum SSHAgentMessage {
 
 struct SSHAgentProtocol {
     
+    /// Largest message body the agent accepts, matching OpenSSH's `AGENT_MAX_LEN`.
+    /// Anything bigger is treated as hostile and the connection is dropped, so a local
+    /// process can't make the app buffer up to 4 GiB by sending a huge length prefix.
+    static let maxMessageLength = 256 * 1024
+    
     static func parse(buffer: inout ByteBuffer) throws -> SSHAgentMessage {
         guard let messageType = buffer.readInteger(as: UInt8.self) else {
             throw SSHAgentError.invalidMessage
@@ -93,4 +98,5 @@ struct SSHAgentProtocol {
 public enum SSHAgentError: Error {
     case invalidMessage
     case unknownMessageType(UInt8)
+    case messageTooLarge(UInt32)
 }

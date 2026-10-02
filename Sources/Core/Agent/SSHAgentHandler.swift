@@ -99,7 +99,12 @@ final class SSHAgentFrameDecoder: ByteToMessageDecoder {
     func decode(context: ChannelHandlerContext, buffer: inout ByteBuffer) throws -> DecodingState {
         if self.length == nil {
             guard buffer.readableBytes >= 4 else { return .needMoreData }
-            self.length = buffer.readInteger(as: UInt32.self)
+            let length = buffer.readInteger(as: UInt32.self)!
+            // Reject oversized frames before buffering them; throwing closes the connection.
+            guard length <= SSHAgentProtocol.maxMessageLength else {
+                throw SSHAgentError.messageTooLarge(length)
+            }
+            self.length = length
         }
         
         guard let length = self.length else { return .needMoreData }
