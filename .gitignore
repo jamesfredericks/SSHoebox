@@ -12,7 +12,6 @@ DerivedData/
 # Swift Package Manager
 .build/
 Packages/
-Package.resolved
 
 # Xcode + SwiftPM integration artifacts (sometimes appear)
 *.xcodeproj/project.xcworkspace/
