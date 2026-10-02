@@ -5,26 +5,25 @@ public struct KeychainManager {
     
     public static let serviceName = "com.sshoebox.app"
     
-    /// Saves data to the keychain.
+    /// Saves data to the keychain, replacing any existing value for `account`.
+    /// Updates in place rather than deleting first, so a failed write never loses the old item.
     public static func save(_ data: Data, account: String) throws {
         // Use standard attribute instead of AccessControl for dev stability (ad-hoc signing changes)
-        var query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: serviceName,
-            kSecAttrAccount as String: account,
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
-        ]
-        
-        // Delete existing item if any
-        let deleteQuery: [String: Any] = [
+        let itemQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: serviceName,
             kSecAttrAccount as String: account
         ]
-        SecItemDelete(deleteQuery as CFDictionary)
+        let attributes: [String: Any] = [
+            kSecValueData as String: data,
+            // Never migrates to another Mac through a keychain backup or sync.
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        ]
         
-        let status = SecItemAdd(query as CFDictionary, nil)
+        var status = SecItemUpdate(itemQuery as CFDictionary, attributes as CFDictionary)
+        if status == errSecItemNotFound {
+            status = SecItemAdd(itemQuery.merging(attributes) { $1 } as CFDictionary, nil)
+        }
         
         if status != errSecSuccess {
             throw SecurityError.keychainError(status: status)
