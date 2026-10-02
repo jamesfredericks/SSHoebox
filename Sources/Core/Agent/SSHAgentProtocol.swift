@@ -99,4 +99,10 @@ public enum SSHAgentError: Error {
     case invalidMessage
     case unknownMessageType(UInt8)
     case messageTooLarge(UInt32)
+    /// A connection from another user (or whose credentials couldn't be read).
+    case unauthorizedPeer(uid: uid_t?)
+    /// The socket's directory isn't a directory owned by the current user.
+    case insecureSocketDirectory(String)
+    /// Something other than a socket already exists at the socket path.
+    case socketPathInUse(String)
 }

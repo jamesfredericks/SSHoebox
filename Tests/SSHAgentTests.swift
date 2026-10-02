@@ -59,6 +59,60 @@ final class SSHAgentTests: XCTestCase {
         XCTAssertEqual(try client.readFrame(), Data([SSHAgentMessage.SSH_AGENT_FAILURE]))
     }
 
+    // MARK: - Socket security
+
+    private func mode(of path: String) -> mode_t {
+        var info = stat()
+        XCTAssertEqual(lstat(path, &info), 0)
+        return info.st_mode & 0o7777
+    }
+
+    func testSocketAndDirectoryAreOwnerOnly() async throws {
+        XCTAssertEqual(chmod(directory, 0o755), 0)
+        _ = try await startServer()
+        XCTAssertEqual(mode(of: directory), 0o700)
+        XCTAssertEqual(mode(of: socketPath), 0o600)
+    }
+
+    func testCreatesMissingSocketDirectory() async throws {
+        try FileManager.default.removeItem(atPath: directory)
+        _ = try await startServer()
+        XCTAssertEqual(mode(of: directory), 0o700)
+        XCTAssertNoThrow(try AgentTestClient(path: socketPath))
+    }
+
+    func testReplacesStaleSocket() async throws {
+        let first = try await startServer()
+        try await first.stop()
+        // Simulate a crash that left the socket file behind.
+        let stale = socket(AF_UNIX, SOCK_STREAM, 0)
+        defer { close(stale) }
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: Array(socketPath.utf8)) }
+        let bound = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(stale, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        XCTAssertEqual(bound, 0)
+
+        _ = try await startServer()
+        XCTAssertNoThrow(try AgentTestClient(path: socketPath))
+    }
+
+    func testRefusesToDeleteNonSocketFile() async throws {
+        FileManager.default.createFile(atPath: socketPath, contents: Data("keep me".utf8))
+        let server = SSHAgentServer(socketPath: socketPath, delegate: delegate)
+        do {
+            try await server.start()
+            XCTFail("start() should refuse to replace a regular file")
+        } catch SSHAgentError.socketPathInUse {
+            // expected
+        }
+        XCTAssertEqual(FileManager.default.contents(atPath: socketPath), Data("keep me".utf8))
+    }
+
     // MARK: - Ordering
 
     func testRepliesFollowRequestOrder() async throws {
