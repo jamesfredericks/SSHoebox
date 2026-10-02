@@ -24,8 +24,10 @@ class TerminalSessionRegistry: ObservableObject {
     }
 
     /// Returns the existing store for a host, or creates one if none exists.
+    /// An existing store picks up `host` as passed, so edits to the host apply to new sessions.
     func store(for host: SavedHost, dbManager: DatabaseManager, vaultKey: SymmetricKey) -> TerminalSessionStore {
         if let existing = stores[host.id] {
+            existing.host = host
             return existing
         }
         let newStore = TerminalSessionStore(host: host, dbManager: dbManager, vaultKey: vaultKey)
@@ -56,7 +58,8 @@ class TerminalSessionStore: ObservableObject {
     @Published var sessions: [TerminalSession] = []
     @Published var selectedSessionId: UUID?
 
-    private let host: SavedHost
+    /// Read at connect time, so new sessions use the latest saved address and user.
+    fileprivate(set) var host: SavedHost
     private let dbManager: DatabaseManager
     private let vaultKey: SymmetricKey
     private var credentialsViewModel: CredentialsViewModel
