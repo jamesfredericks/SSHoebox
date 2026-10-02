@@ -337,56 +337,47 @@ class VaultViewModel: ObservableObject {
     
     // MARK: - Auto-Lock
     
-    private func startAutoLockMonitoring() {
-        // Get timeout from UserDefaults (in minutes, 0 = disabled)
-        let timeoutMinutes = UserDefaults.standard.integer(forKey: "autoLockTimeout")
-        let timeoutInterval: TimeInterval
-        
-        if timeoutMinutes == 0 {
-            // First launch or "Never" selected - default to 15 minutes
-            if !UserDefaults.standard.bool(forKey: "hasSetAutoLockTimeout") {
-                timeoutInterval = 15 * 60 // 15 minutes default
+    /// UserDefaults key: keep the vault unlocked while terminal sessions are connected.
+    /// Off by default, so an unattended Mac still locks (which also ends the sessions).
+    static let deferAutoLockForSessionsKey = "autoLockDeferForSessions"
+    
+    /// The auto-lock timeout from Preferences in seconds (0 = never).
+    private var autoLockTimeoutInterval: TimeInterval {
+        // Unset means first launch: default to 15 minutes. A stored 0 is an explicit "Never".
+        if !UserDefaults.standard.bool(forKey: "hasSetAutoLockTimeout") {
+            if UserDefaults.standard.integer(forKey: "autoLockTimeout") == 0 {
                 UserDefaults.standard.set(15, forKey: "autoLockTimeout")
-                UserDefaults.standard.set(true, forKey: "hasSetAutoLockTimeout")
-            } else {
-                // User explicitly chose "Never"
-                timeoutInterval = 0
             }
-        } else {
-            timeoutInterval = TimeInterval(timeoutMinutes * 60)
+            UserDefaults.standard.set(true, forKey: "hasSetAutoLockTimeout")
         }
-        
-        // Create and start idle monitor
-        let monitor = IdleMonitor(timeoutInterval: timeoutInterval)
+        return TimeInterval(UserDefaults.standard.integer(forKey: "autoLockTimeout") * 60)
+    }
+    
+    private func startAutoLockMonitoring() {
+        let monitor = IdleMonitor(timeoutInterval: autoLockTimeoutInterval)
         self.idleMonitor = monitor
         
         // Subscribe to idle events
         monitor.$isIdle
             .sink { [weak self] isIdle in
-                guard isIdle else { return }
-                // Defer auto-lock while SSH sessions are actively connected
-                if (self?.activeSessionCount?() ?? 0) > 0 {
-                    self?.idleMonitor?.resetActivity()
+                guard let self, isIdle else { return }
+                if UserDefaults.standard.bool(forKey: Self.deferAutoLockForSessionsKey),
+                   (self.activeSessionCount?() ?? 0) > 0 {
+                    self.idleMonitor?.resetActivity()
                     return
                 }
-                self?.lock()
-            }
-            .store(in: &cancellables)
-        
-        // Listen for timeout preference changes
-        NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
-            .sink { [weak self] _ in
-                self?.restartAutoLockMonitoring()
+                self.lock()
             }
             .store(in: &cancellables)
         
         monitor.startMonitoring()
     }
     
-    func restartAutoLockMonitoring() {
-        guard isUnlocked else { return }
-        stopAutoLockMonitoring()
-        startAutoLockMonitoring()
+    /// Applies a changed auto-lock timeout to the running monitor without resetting the idle
+    /// clock. (Monitoring used to restart on every UserDefaults write, including window
+    /// autosave, so the idle clock kept being reset and auto-lock rarely fired.)
+    func autoLockTimeoutDidChange() {
+        idleMonitor?.timeoutInterval = autoLockTimeoutInterval
     }
     
     private func stopAutoLockMonitoring() {
