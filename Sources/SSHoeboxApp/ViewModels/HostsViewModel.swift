@@ -87,16 +87,12 @@ class HostsViewModel: ObservableObject {
     func addHost(name: String, hostname: String, port: Int, protocolType: String, user: String,
                  groupId: String? = nil,
                  credentialType: String = "none", credentialSecret: String = "") {
-        guard let encryptedName = try? CryptoManager.encryptString(name, using: vaultKey),
-              let encryptedHostname = try? CryptoManager.encryptString(hostname, using: vaultKey),
-              let encryptedUser = try? CryptoManager.encryptString(user, using: vaultKey) else {
+        guard let host = try? SavedHost.encrypted(name: name, hostname: hostname, port: port,
+                                                  protocolType: protocolType, user: user,
+                                                  groupId: groupId, using: vaultKey) else {
             errorMessage = "Failed to encrypt host data."
             return
         }
-
-        let host = SavedHost(name: encryptedName, hostname: encryptedHostname,
-                             port: port, protocolType: protocolType, user: encryptedUser,
-                             groupId: groupId)
         do {
             try repository.save(host)
 
@@ -125,24 +121,22 @@ class HostsViewModel: ObservableObject {
             return
         }
 
-        guard let encryptedName = try? CryptoManager.encryptString(name, using: vaultKey),
-              let encryptedHostname = try? CryptoManager.encryptString(hostname, using: vaultKey),
-              let encryptedUser = try? CryptoManager.encryptString(user, using: vaultKey) else {
+        guard let updatedHost = try? SavedHost.encrypted(
+            id: id,
+            name: name,
+            hostname: hostname,
+            port: port,
+            protocolType: protocolType,
+            user: user,
+            groupId: groupId,
+            createdAt: existingHost.createdAt,
+            updatedAt: Date(),
+            lastConnectedAt: existingHost.lastConnectedAt,
+            using: vaultKey
+        ) else {
             errorMessage = "Failed to encrypt host data."
             return
         }
-
-        let updatedHost = SavedHost(
-            id: id,
-            name: encryptedName,
-            hostname: encryptedHostname,
-            port: port,
-            protocolType: protocolType,
-            user: encryptedUser,
-            groupId: groupId,
-            createdAt: existingHost.createdAt,
-            updatedAt: Date()
-        )
 
         do {
             try repository.save(updatedHost)

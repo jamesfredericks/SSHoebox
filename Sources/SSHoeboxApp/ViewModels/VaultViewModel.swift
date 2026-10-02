@@ -13,6 +13,8 @@ class VaultViewModel: ObservableObject {
     @Published var isNewUser: Bool = false
     @Published var errorMessage: String?
     @Published var showBiometricSetupPrompt: Bool = false
+    /// True while the master password is being checked (key derivation takes a moment).
+    @Published private(set) var isUnlocking: Bool = false
     
     // SSH Agent
     @Published var isAgentEnabled: Bool = UserDefaults.standard.bool(forKey: "isAgentEnabled") {
@@ -92,11 +94,6 @@ class VaultViewModel: ObservableObject {
         try JSONDecoder().decode(VaultMetadata.self, from: currentVaultMetadata())
     }
     
-    private static func isValidKey(_ key: SymmetricKey, for metadata: VaultMetadata) -> Bool {
-        guard let decrypted = try? CryptoManager.decrypt(metadata.validation, using: key) else { return false }
-        return String(data: decrypted, encoding: .utf8) == "SSHOEBOX_VALID"
-    }
-    
     /// A vault.db exists but its metadata does not (e.g. the sidecar hasn't finished syncing).
     /// Creating a vault over it would make the existing data undecryptable.
     var hasOrphanedDatabase: Bool {
@@ -123,50 +120,81 @@ class VaultViewModel: ObservableObject {
         self.errorMessage = nil
     }
     
+    /// Minimum length for a new master password. It protects the vault against offline
+    /// guessing by anyone who obtains a copy of the vault files.
+    static let minimumPasswordLength = 12
+
     func createVault(password: String) {
         guard !hasOrphanedDatabase else {
             self.errorMessage = "A vault database already exists in this folder but its vault_metadata.json is missing. If it is still syncing, wait and relaunch; otherwise use \"Create New Vault…\" to replace it."
             return
         }
-        do {
-            let salt = try CryptoManager.generateSalt()
-            let key = try CryptoManager.deriveKey(password: password, salt: salt)
-            
-            let manager = try openDatabase(vaultKey: key)
-            
-            // Save metadata to portable JSON sidecar instead of Keychain
-            let validationData = try CryptoManager.encrypt("SSHOEBOX_VALID".data(using: .utf8)!, using: key)
-            let vaultMetadata = VaultMetadata(salt: salt, validation: validationData, version: 1)
-            let metadataData = try JSONEncoder().encode(vaultMetadata)
-            do {
-                try metadataData.write(to: URL(fileURLWithPath: metadataPath), options: .atomic)
-            } catch {
-                // Without metadata the new database can never be opened; don't leave it behind.
-                try? FileManager.default.removeItem(atPath: dbPath)
-                throw error
-            }
-            
-            self.dbManager = manager
-            self.vaultKey = key
-            self.vaultID = vaultMetadata.identifier
-            self.isUnlocked = true
-            self.isNewUser = false
-            self.errorMessage = nil
-            
-            if BiometricAuthManager.isBiometricAvailable() && !BiometricAuthManager.hasVaultEnrollment(vaultID: vaultMetadata.identifier) {
-                self.showBiometricSetupPrompt = true
-            }
-            
-            // Start auto-lock monitoring
-            startAutoLockMonitoring()
-            
-            if isAgentEnabled {
-                startAgent()
-            }
-            
-        } catch {
-            self.errorMessage = "Failed to create vault: \(error.localizedDescription)"
+        guard password.count >= Self.minimumPasswordLength else {
+            self.errorMessage = "Use a master password of at least \(Self.minimumPasswordLength) characters."
+            return
         }
+        guard !isUnlocking else { return }
+        isUnlocking = true
+        Task {
+            defer { isUnlocking = false }
+            do {
+                // Key wrapping runs the (deliberately slow) KDF, so keep it off the main thread.
+                let (metadata, key) = try await Task.detached(priority: .userInitiated) {
+                    try VaultMetadata.create(password: password)
+                }.value
+                
+                let manager = try openDatabase(vaultKey: key)
+                try FieldEncryptionMigration.run(manager, vaultKey: key)
+                
+                // Save metadata to portable JSON sidecar instead of Keychain
+                do {
+                    try writeMetadata(metadata)
+                } catch {
+                    // Without metadata the new database can never be opened; don't leave it behind.
+                    try? FileManager.default.removeItem(atPath: dbPath)
+                    throw error
+                }
+                
+                completeUnlock(dbManager: manager, vaultKey: key, vaultID: metadata.identifier)
+            } catch {
+                self.errorMessage = "Failed to create vault: \(error.localizedDescription)"
+            }
+        }
+    }
+    
+    private func writeMetadata(_ metadata: VaultMetadata) throws {
+        try JSONEncoder().encode(metadata).write(to: URL(fileURLWithPath: metadataPath), options: .atomic)
+    }
+    
+    /// Shared tail of every successful unlock: publish the unlocked state and start the
+    /// services that run while the vault is open.
+    private func completeUnlock(dbManager manager: DatabaseManager, vaultKey key: SymmetricKey, vaultID: String) {
+        self.dbManager = manager
+        self.vaultKey = key
+        self.vaultID = vaultID
+        self.isUnlocked = true
+        self.isNewUser = false
+        self.errorMessage = nil
+        
+        // Prompt biometric enrollment if this vault has no Touch ID key of its own yet
+        if BiometricAuthManager.isBiometricAvailable() && !BiometricAuthManager.hasVaultEnrollment(vaultID: vaultID) {
+            self.showBiometricSetupPrompt = true
+        }
+        
+        startAutoLockMonitoring()
+        
+        if isAgentEnabled {
+            startAgent()
+        }
+    }
+    
+    /// Opens the database and brings older vault data up to the current field encryption format.
+    private func openAndMigrate(vaultKey key: SymmetricKey) throws -> DatabaseManager {
+        let manager = try openDatabase(vaultKey: key)
+        if try FieldEncryptionMigration.isNeeded(manager) {
+            try FieldEncryptionMigration.run(manager, vaultKey: key)
+        }
+        return manager
     }
     
     private func recordFailedUnlock() {
@@ -176,81 +204,68 @@ class VaultViewModel: ObservableObject {
         let delay = min(pow(2.0, Double(failedUnlockAttempts - 4)) * 15, 300)
         lockoutUntil = Date().addingTimeInterval(delay)
     }
+    
+    private var lockoutMessage: String? {
+        guard let lockout = lockoutUntil, lockout > Date() else { return nil }
+        let remaining = Int(lockout.timeIntervalSinceNow.rounded(.up))
+        return "Too many failed attempts. Try again in \(remaining)s."
+    }
 
     func unlock(password: String) {
         // Enforce lockout before attempting decryption
-        if let lockout = lockoutUntil, lockout > Date() {
-            let remaining = Int(lockout.timeIntervalSinceNow.rounded(.up))
-            errorMessage = "Too many failed attempts. Try again in \(remaining)s."
+        if let lockoutMessage {
+            errorMessage = lockoutMessage
             return
         }
-
-        do {
-            // 1. Retrieve Salt & Validation from Sidecar (or fallback to Keychain)
-            let metadataData: Data
-            if FileManager.default.fileExists(atPath: metadataPath) {
-                // Portable Vault Sidecar
-                metadataData = try Data(contentsOf: URL(fileURLWithPath: metadataPath))
-            } else {
-                // Legacy Keychain Migration
-                metadataData = try KeychainManager.read(account: "vault_metadata")
-                try metadataData.write(to: URL(fileURLWithPath: metadataPath))
-            }
-            
-            let metadata = try JSONDecoder().decode(VaultMetadata.self, from: metadataData)
-            
-            // 2. Derive Key
-            let key = try CryptoManager.deriveKey(password: password, salt: metadata.salt)
-            
-            // 3. Verify Key. A wrong password fails AES-GCM authentication, which must count
-            // as a failed attempt rather than escaping to the generic catch below.
-            guard Self.isValidKey(key, for: metadata) else {
-                recordFailedUnlock()
-                if let lockout = lockoutUntil, lockout > Date() {
-                    let remaining = Int(lockout.timeIntervalSinceNow.rounded(.up))
-                    self.errorMessage = "Too many failed attempts. Try again in \(remaining)s."
+        guard !isUnlocking else { return }
+        isUnlocking = true
+        
+        Task {
+            defer { isUnlocking = false }
+            do {
+                // 1. Retrieve the metadata from the sidecar (or migrate the legacy Keychain copy)
+                let metadataData: Data
+                if FileManager.default.fileExists(atPath: metadataPath) {
+                    metadataData = try Data(contentsOf: URL(fileURLWithPath: metadataPath))
                 } else {
-                    self.errorMessage = "Invalid password."
+                    metadataData = try KeychainManager.read(account: "vault_metadata")
+                    try metadataData.write(to: URL(fileURLWithPath: metadataPath), options: .atomic)
                 }
-                return
+                let metadata = try JSONDecoder().decode(VaultMetadata.self, from: metadataData)
+                
+                // 2. Derive and check the key off the main thread. A wrong password must count
+                // as a failed attempt rather than escaping to the generic catch below.
+                let derived = try await Task.detached(priority: .userInitiated) {
+                    try metadata.vaultKey(password: password)
+                }.value
+                guard let key = derived else {
+                    recordFailedUnlock()
+                    self.errorMessage = lockoutMessage ?? "Invalid password."
+                    return
+                }
+                failedUnlockAttempts = 0
+                lockoutUntil = nil
+                
+                // 3. Open the DB, migrating older field encryption
+                let manager = try openAndMigrate(vaultKey: key)
+                
+                // 4. Upgrade legacy metadata to a wrapped key with the current KDF settings.
+                // Best effort: the vault is already open, and the upgrade is retried next time.
+                if metadata.needsUpgrade {
+                    do {
+                        let upgraded = try await Task.detached(priority: .userInitiated) {
+                            try metadata.rewrapped(vaultKey: key, password: password)
+                        }.value
+                        try writeMetadata(upgraded)
+                    } catch {
+                        print("Vault metadata upgrade failed: \(error)")
+                    }
+                }
+                
+                completeUnlock(dbManager: manager, vaultKey: key, vaultID: metadata.identifier)
+            } catch {
+                self.errorMessage = "Unlock failed: \(error.localizedDescription)"
             }
-
-            // 4. Open DB
-            failedUnlockAttempts = 0
-            lockoutUntil = nil
-            let manager = try openDatabase(vaultKey: key)
-            self.dbManager = manager
-            self.vaultKey = key
-            
-            // 5. Check Migration
-            if (metadata.version ?? 0) < 1 {
-                try performMetadataEncryption(db: manager, key: key)
-                var newMetadata = metadata
-                newMetadata.version = 1
-                let newMetadataData = try JSONEncoder().encode(newMetadata)
-                try newMetadataData.write(to: URL(fileURLWithPath: metadataPath))
-            }
-            
-            self.isUnlocked = true
-            self.errorMessage = nil
-            
-            // Prompt biometric enrollment if this vault has no Touch ID key of its own yet
-            self.vaultID = metadata.identifier
-            if BiometricAuthManager.isBiometricAvailable() && !BiometricAuthManager.hasVaultEnrollment(vaultID: metadata.identifier) {
-                self.showBiometricSetupPrompt = true
-            }
-            
-            // Start auto-lock monitoring
-            // Start auto-lock monitoring
-            startAutoLockMonitoring()
-            
-            // Start agent if enabled
-            if isAgentEnabled {
-                startAgent()
-            }
-            
-        } catch {
-            self.errorMessage = "Unlock failed: \(error.localizedDescription)"
         }
     }
     
@@ -264,7 +279,7 @@ class VaultViewModel: ObservableObject {
                 let key = try await BiometricAuthManager.unlockWithBiometrics(vaultID: vaultID)
                 
                 // Validate the key against the stored validation token
-                guard Self.isValidKey(key, for: metadata) else {
+                guard metadata.isValid(key) else {
                     self.errorMessage = usingLegacyKey
                         ? "\(biometricTypeName) was set up for a different vault. Unlock with your password, then enable \(biometricTypeName) for this vault."
                         : "Biometric unlock failed: key mismatch."
@@ -276,19 +291,9 @@ class VaultViewModel: ObservableObject {
                     try? BiometricAuthManager.enrollBiometric(vaultKey: key, vaultID: vaultID)
                 }
                 
-                let manager = try openDatabase(vaultKey: key)
-                self.dbManager = manager
-                self.vaultKey = key
-                self.vaultID = vaultID
-                self.isUnlocked = true
-                self.errorMessage = nil
-                startAutoLockMonitoring()
-                
-                // Start agent if enabled
-                if self.isAgentEnabled {
-                    self.startAgent()
-                }
-                
+                let manager = try openAndMigrate(vaultKey: key)
+                completeUnlock(dbManager: manager, vaultKey: key, vaultID: vaultID)
+
             } catch {
                 self.errorMessage = "Biometric unlock failed: \(error.localizedDescription)"
             }
@@ -312,28 +317,6 @@ class VaultViewModel: ObservableObject {
     func disableBiometrics() {
         guard let vaultID else { return }
         BiometricAuthManager.revokeBiometric(vaultID: vaultID)
-    }
-    
-    private func performMetadataEncryption(db: DatabaseManager, key: SymmetricKey) throws {
-        try db.dbWriter.write { db in
-            // Migrate Hosts
-            let hosts = try SavedHost.fetchAll(db)
-            for var host in hosts {
-                // Check if already base64 (crude check, but if migration runs once, we assume plaintext)
-                // Actually, since we check version < 1, we assume all are plaintext.
-                host.name = try CryptoManager.encryptString(host.name, using: key)
-                host.hostname = try CryptoManager.encryptString(host.hostname, using: key)
-                host.user = try CryptoManager.encryptString(host.user, using: key)
-                try host.update(db)
-            }
-            
-            // Migrate Credentials
-            let credentials = try Credential.fetchAll(db)
-            for var cred in credentials {
-                cred.username = try CryptoManager.encryptString(cred.username, using: key)
-                try cred.update(db)
-            }
-        }
     }
     
     func lock() {

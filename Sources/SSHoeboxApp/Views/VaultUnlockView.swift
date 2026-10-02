@@ -54,12 +54,19 @@ struct VaultUnlockView: View {
                 }
                 
                 VStack(spacing: 12) {
-                    Button(viewModel.isNewUser ? "Create Vault" : "Unlock") {
+                    Button {
                         submit()
+                    } label: {
+                        if viewModel.isUnlocking {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Text(viewModel.isNewUser ? "Create Vault" : "Unlock")
+                        }
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(DesignSystem.Colors.accent)
                     .keyboardShortcut(.defaultAction)
+                    .disabled(viewModel.isUnlocking)
                     
                     // Biometric unlock button — only shown when enrolled and not creating vault
                     if !viewModel.isNewUser && viewModel.isBiometricEnrolled {
@@ -84,7 +91,7 @@ struct VaultUnlockView: View {
                 }
                 
                 if viewModel.isNewUser {
-                    Text("This password encrypts your entire vault. Don't lose it!")
+                    Text("This password encrypts your entire vault. Use at least \(VaultViewModel.minimumPasswordLength) characters, and don't lose it!")
                         .font(.caption)
                         .foregroundStyle(DesignSystem.Colors.textSecondary)
                 }
@@ -92,10 +99,6 @@ struct VaultUnlockView: View {
             .padding(40)
         }
         .frame(minWidth: 600, minHeight: 600)
-        // Biometric setup prompt shown after first password unlock
-        .sheet(isPresented: $viewModel.showBiometricSetupPrompt) {
-            BiometricSetupSheet(viewModel: viewModel)
-        }
         // Auto-trigger biometric unlock on launch if enrolled
         .onAppear {
             if !viewModel.isNewUser && viewModel.isBiometricEnrolled {
@@ -120,7 +123,10 @@ struct VaultUnlockView: View {
                 viewModel.errorMessage = "Passwords do not match."
                 return
             }
-            guard !password.isEmpty else { return }
+            guard password.count >= VaultViewModel.minimumPasswordLength else {
+                viewModel.errorMessage = "Use a master password of at least \(VaultViewModel.minimumPasswordLength) characters."
+                return
+            }
             viewModel.createVault(password: password)
         } else {
             viewModel.unlock(password: password)

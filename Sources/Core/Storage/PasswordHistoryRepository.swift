@@ -11,8 +11,7 @@ public struct PasswordHistoryRepository {
 
     /// Archives `oldSecret` for the given credential so it can be reviewed later.
     public func add(credentialId: String, oldSecret: Data, vaultKey: SymmetricKey) throws {
-        let encrypted = try CryptoManager.encrypt(oldSecret, using: vaultKey)
-        let record = PasswordHistory(credentialId: credentialId, encryptedBlob: encrypted)
+        let record = try PasswordHistory.encrypted(credentialId: credentialId, secret: oldSecret, using: vaultKey)
         try dbManager.dbWriter.write { db in
             try record.insert(db)
         }
@@ -30,7 +29,7 @@ public struct PasswordHistoryRepository {
 
     /// Decrypts a history entry and returns the secret as a String.
     public func decrypt(_ record: PasswordHistory, vaultKey: SymmetricKey) throws -> String {
-        let data = try CryptoManager.decrypt(record.encryptedBlob, using: vaultKey)
+        let data = try record.decryptedSecret(using: vaultKey)
         return String(data: data, encoding: .utf8) ?? ""
     }
 

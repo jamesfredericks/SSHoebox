@@ -193,6 +193,14 @@ public struct DatabaseManager {
             }
         }
 
+        // Vault-wide settings, e.g. which field encryption format the rows use.
+        migrator.registerMigration("v7") { db in
+            try db.create(table: "vaultInfo") { t in
+                t.column("key", .text).primaryKey()
+                t.column("value", .text).notNull()
+            }
+        }
+
         return migrator
     }
 }
