@@ -8,85 +8,124 @@ public protocol SSHAgentDelegate: AnyObject {
     func sign(key: Data, data: Data, flags: UInt32) async throws -> Data
 }
 
+/// Handles one agent connection.
+///
+/// Requests are answered strictly in the order they arrive: `channelRead` only queues
+/// them, and a single worker task per connection processes the queue one request at a
+/// time. A slow sign request therefore can't be overtaken by a later, faster reply,
+/// which clients (which match replies to requests purely by order) would misread.
 final class SSHAgentHandler: ChannelInboundHandler {
     typealias InboundIn = ByteBuffer
     typealias OutboundOut = ByteBuffer
-    
+
+    /// Most requests a connection may have waiting behind the one in progress. A client
+    /// that pipelines more than this isn't waiting for replies, so it is disconnected.
+    static let maxQueuedRequests = 64
+
+    private enum Request {
+        case message(SSHAgentMessage)
+        case invalid
+    }
+
     private weak var delegate: SSHAgentDelegate?
-    
+    private var requests: AsyncStream<Request>.Continuation?
+    private var worker: Task<Void, Never>?
+
     init(delegate: SSHAgentDelegate) {
         self.delegate = delegate
     }
-    
+
+    func handlerAdded(context: ChannelHandlerContext) {
+        var continuation: AsyncStream<Request>.Continuation!
+        let stream = AsyncStream<Request>(bufferingPolicy: .bufferingOldest(Self.maxQueuedRequests)) {
+            continuation = $0
+        }
+        requests = continuation
+
+        let channel = context.channel
+        worker = Task { [weak self] in
+            for await request in stream {
+                guard let self = self else { return }
+                let reply = await self.process(request)
+                Self.send(reply, on: channel)
+            }
+        }
+    }
+
+    func handlerRemoved(context: ChannelHandlerContext) {
+        finish()
+    }
+
+    func channelInactive(context: ChannelHandlerContext) {
+        finish()
+        context.fireChannelInactive()
+    }
+
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         var buffer = self.unwrapInboundIn(data)
-        
-        // Handle framing: 4-byte length prefix
-        // For simplicity in this initial version, we assume complete messages or use a ByteToMessageDecoder in the pipeline.
-        // We'll implemented the framing logic here for now to keep it simple, or better, add a LengthFieldBasedFrameDecoder to the pipeline.
-        
-        // Assuming the pipeline has `LengthFieldBasedFrameDecoder`
-        
+
+        let request: Request
         do {
-            let message = try SSHAgentProtocol.parse(buffer: &buffer)
-            handleMessage(context: context, message: message)
+            request = .message(try SSHAgentProtocol.parse(buffer: &buffer))
         } catch {
+            // Unknown or malformed requests still get a reply, queued behind earlier ones.
             print("Agent protocol error: \(error)")
-            sendFailure(context: context)
+            request = .invalid
+        }
+
+        if case .dropped = requests?.yield(request) {
+            print("SSH Agent: too many queued requests, closing connection")
+            context.close(promise: nil)
         }
     }
-    
-    private func handleMessage(context: ChannelHandlerContext, message: SSHAgentMessage) {
-        Task {
-            do {
-                switch message {
-                case .requestIdentities:
-                    let identities = await delegate?.getIdentities() ?? []
-                    let response = SSHAgentMessage.identitiesAnswer(identities)
-                    sendResponse(context: context, message: response)
-                    
-                case .signRequest(let key, let data, let flags):
-                    do {
-                        if let signature = try await delegate?.sign(key: key, data: data, flags: flags) {
-                            let response = SSHAgentMessage.signResponse(signature: signature)
-                            sendResponse(context: context, message: response)
-                        } else {
-                            sendFailure(context: context)
-                        }
-                    } catch {
-                        sendFailure(context: context)
-                    }
-                    
-                default:
-                    // Unsupported message
-                    sendFailure(context: context)
-                }
-        }
-    }
-}
-    
-    private func sendResponse(context: ChannelHandlerContext, message: SSHAgentMessage) {
-        // Run on EventLoop to safely write to channel
-        context.eventLoop.execute {
-            var contentBuffer = context.channel.allocator.buffer(capacity: 1024)
-            SSHAgentProtocol.serialize(message: message, into: &contentBuffer)
-            
-            // Add length prefix
-            var frameBuffer = context.channel.allocator.buffer(capacity: 4 + contentBuffer.readableBytes)
-            frameBuffer.writeInteger(UInt32(contentBuffer.readableBytes))
-            frameBuffer.writeBuffer(&contentBuffer)
-            
-            context.writeAndFlush(self.wrapOutboundOut(frameBuffer), promise: nil)
-        }
-    }
-    
-    private func sendFailure(context: ChannelHandlerContext) {
-        sendResponse(context: context, message: .failure)
-    }
-    
+
     func errorCaught(context: ChannelHandlerContext, error: Error) {
         print("Agent handler error: \(error)")
         context.close(promise: nil)
+    }
+
+    private func finish() {
+        requests?.finish()
+        requests = nil
+        worker?.cancel()
+        worker = nil
+    }
+
+    // MARK: - Request processing
+
+    private func process(_ request: Request) async -> SSHAgentMessage {
+        guard case .message(let message) = request, let delegate = delegate else {
+            return .failure
+        }
+
+        switch message {
+        case .requestIdentities:
+            return .identitiesAnswer(await delegate.getIdentities())
+
+        case .signRequest(let key, let data, let flags):
+            do {
+                return .signResponse(signature: try await delegate.sign(key: key, data: data, flags: flags))
+            } catch {
+                return .failure
+            }
+
+        default:
+            // Unsupported message
+            return .failure
+        }
+    }
+
+    /// Frames and writes a reply. `Channel` writes are thread-safe and keep their order.
+    private static func send(_ message: SSHAgentMessage, on channel: Channel) {
+        var contentBuffer = channel.allocator.buffer(capacity: 1024)
+        SSHAgentProtocol.serialize(message: message, into: &contentBuffer)
+
+        // Add length prefix
+        var frameBuffer = channel.allocator.buffer(capacity: 4 + contentBuffer.readableBytes)
+        frameBuffer.writeInteger(UInt32(contentBuffer.readableBytes))
+        frameBuffer.writeBuffer(&contentBuffer)
+
+        channel.writeAndFlush(frameBuffer, promise: nil)
     }
 }
 

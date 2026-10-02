@@ -58,6 +58,46 @@ final class SSHAgentTests: XCTestCase {
         try client.send(message: message)
         XCTAssertEqual(try client.readFrame(), Data([SSHAgentMessage.SSH_AGENT_FAILURE]))
     }
+
+    // MARK: - Ordering
+
+    func testRepliesFollowRequestOrder() async throws {
+        _ = try await startServer()
+        let client = try AgentTestClient(path: socketPath)
+        // A slow sign followed by a fast identities request, sent in one write.
+        let slowSign = AgentTestClient.signRequest(key: MockAgentDelegate.keyBlob, data: Data("slow-data".utf8))
+        try client.send(raw: AgentTestClient.encodeString(slowSign)
+                        + AgentTestClient.encodeString(Data([SSHAgentMessage.SSH2_AGENTC_REQUEST_IDENTITIES]))
+                        + AgentTestClient.encodeString(Data([200])))
+
+        XCTAssertEqual(try client.readFrame().first, SSHAgentMessage.SSH2_AGENT_SIGN_RESPONSE,
+                       "The slow sign must be answered before the identities request behind it")
+        XCTAssertEqual(try client.readFrame().first, SSHAgentMessage.SSH2_AGENT_IDENTITIES_ANSWER)
+        XCTAssertEqual(try client.readFrame(), Data([SSHAgentMessage.SSH_AGENT_FAILURE]))
+    }
+
+    func testSignResponseCarriesSignature() async throws {
+        _ = try await startServer()
+        let client = try AgentTestClient(path: socketPath)
+        try client.send(message: AgentTestClient.signRequest(key: MockAgentDelegate.keyBlob, data: Data("abc".utf8)))
+        XCTAssertEqual(try client.readFrame(),
+                       Data([SSHAgentMessage.SSH2_AGENT_SIGN_RESPONSE])
+                       + AgentTestClient.encodeString(MockAgentDelegate.signature + Data("abc".utf8)))
+    }
+
+    func testFloodOfPipelinedRequestsDropsConnection() async throws {
+        delegate.slowSignDelay = 2_000_000_000
+        _ = try await startServer()
+        let client = try AgentTestClient(path: socketPath)
+        let slowSign = AgentTestClient.encodeString(
+            AgentTestClient.signRequest(key: MockAgentDelegate.keyBlob, data: Data("slow".utf8)))
+        let identities = AgentTestClient.encodeString(Data([SSHAgentMessage.SSH2_AGENTC_REQUEST_IDENTITIES]))
+        var flood = slowSign
+        for _ in 0..<(SSHAgentHandler.maxQueuedRequests + 8) { flood.append(identities) }
+        try client.send(raw: flood)
+        XCTAssertTrue(try client.readUntilClosed().isEmpty,
+                      "Overflowing the request queue should drop the connection")
+    }
 }
 
 // MARK: - Test doubles
