@@ -468,13 +468,51 @@ class VaultViewModel: ObservableObject {
         return try KeychainManager.read(account: "vault_metadata")
     }
     
-    /// Validates a backup, locks the vault, and replaces the database and metadata with it.
-    /// The user must unlock again with the password that was in use when the backup was made.
-    func restoreBackup(_ data: Data) throws {
+    /// A backup that has been checked and is waiting for the user to confirm the restore.
+    struct PendingRestore {
+        let backup: VaultBackup
+        /// The backup is from another vault, so its master password is needed to check it.
+        let needsPassword: Bool
+        /// Made before backups were authenticated (v4); only its checksum could be checked.
+        var isUnauthenticated: Bool { backup.authenticationCode == nil }
+    }
+
+    /// Checks a backup's structure and works out how its authenticity can be checked.
+    func prepareRestore(_ data: Data) throws -> PendingRestore {
         let backup = try BackupManager.verify(data)
-        
+        let fromThisVault = backup.metadata.map { $0.identifier == vaultID } ?? true
+        return PendingRestore(backup: backup, needsPassword: !fromThisVault)
+    }
+
+    /// Authenticates a pending restore with the open vault's key, or with `password` for a
+    /// backup of another vault. Throws if the backup was altered or the password is wrong.
+    func authenticateRestore(_ pending: PendingRestore, password: String? = nil) async throws {
+        let key: SymmetricKey
+        if pending.needsPassword {
+            guard let password, let metadata = pending.backup.metadata else { throw BackupError.notAuthentic }
+            let derived = try await Task.detached(priority: .userInitiated) {
+                try metadata.vaultKey(password: password)
+            }.value
+            guard let derived else { throw RestoreError.wrongPassword }
+            key = derived
+        } else {
+            guard let vaultKey else { throw BackupError.notAuthentic }
+            key = vaultKey
+        }
+        if pending.isUnauthenticated {
+            // Nothing to check beyond the checksum, but the backup's metadata must belong to
+            // the key, or the restored vault couldn't be unlocked.
+            if let metadata = pending.backup.metadata, !metadata.isValid(key) { throw BackupError.notAuthentic }
+        } else if !pending.backup.isAuthentic(using: key) {
+            throw BackupError.notAuthentic
+        }
+    }
+
+    /// Locks the vault and replaces the database and metadata with an authenticated backup.
+    /// The user must unlock again with the password that was in use when the backup was made.
+    func restoreBackup(_ pending: PendingRestore) throws {
         lock()
-        try BackupManager.install(backup, databasePath: dbPath, metadataPath: metadataPath)
+        try BackupManager.install(pending.backup, databasePath: dbPath, metadataPath: metadataPath)
         // Touch ID keys are per vault, so a restored vault with different metadata simply
         // has no enrollment until the user enables it again.
         checkIfVaultExists()
@@ -515,6 +553,14 @@ class VaultViewModel: ObservableObject {
         let appDir = appSupport.appendingPathComponent("com.sshoebox.app")
         try? FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)
         return appDir.appendingPathComponent("agent.sock").path
+    }
+}
+
+enum RestoreError: LocalizedError {
+    case wrongPassword
+
+    var errorDescription: String? {
+        "That isn't the master password of the vault in this backup."
     }
 }
 

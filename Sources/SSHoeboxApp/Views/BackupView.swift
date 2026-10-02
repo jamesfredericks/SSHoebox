@@ -14,6 +14,14 @@ struct BackupView: View {
     @State private var showingAlert = false
     @State private var alertMessage = ""
     
+    // Restore: a checked backup waiting for its vault's password and/or the user's confirmation
+    @State private var pendingRestore: VaultViewModel.PendingRestore?
+    @State private var showingRestorePassword = false
+    @State private var showingRestoreConfirm = false
+    @State private var restorePassword = ""
+    @State private var restorePasswordError: String?
+    @State private var isCheckingRestore = false
+    
     // Simplified Backup State
     @AppStorage("backupFolder") private var backupFolder: String = "No folder selected"
     @State private var lastBackupDate = "Never"
@@ -29,7 +37,7 @@ struct BackupView: View {
             Section {
                 Button {
                     do {
-                        let data = try backupManager.createExportData(vaultMetadata: vaultViewModel.currentVaultMetadata())
+                        let data = try makeExportData()
                         exportData = BackupDocument(data: data)
                         showingExporter = true
                     } catch {
@@ -114,6 +122,15 @@ struct BackupView: View {
                 errorMessage = error.localizedDescription
             }
         }
+        .sheet(isPresented: $showingRestorePassword, onDismiss: { restorePassword = "" }) {
+            restorePasswordSheet
+        }
+        .alert("Restore This Backup?", isPresented: $showingRestoreConfirm, presenting: pendingRestore) { pending in
+            Button("Cancel", role: .cancel) { pendingRestore = nil }
+            Button("Restore", role: .destructive) { performRestore(pending) }
+        } message: { pending in
+            Text(restoreConfirmMessage(for: pending))
+        }
         .alert("Backup Status", isPresented: $showingAlert) {
             Button("OK") {}
         } message: {
@@ -134,29 +151,109 @@ struct BackupView: View {
         }
     }
     
+    private func makeExportData() throws -> Data {
+        guard let vaultKey = vaultViewModel.vaultKey else { throw BackupError.notAuthentic }
+        return try backupManager.createExportData(vaultMetadata: vaultViewModel.currentVaultMetadata(), vaultKey: vaultKey)
+    }
+    
     func restore(from url: URL) {
-        guard url.startAccessingSecurityScopedResource() else {
-            errorMessage = "Permission denied"
-            return
-        }
-        defer { url.stopAccessingSecurityScopedResource() }
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         
-        let data: Data
         do {
-            data = try Data(contentsOf: url)
-            _ = try BackupManager.verify(data)
+            let data = try Data(contentsOf: url)
+            let pending = try vaultViewModel.prepareRestore(data)
+            pendingRestore = pending
+            errorMessage = nil
+            if pending.needsPassword {
+                restorePasswordError = nil
+                showingRestorePassword = true
+            } else {
+                Task {
+                    do {
+                        try await vaultViewModel.authenticateRestore(pending)
+                        showingRestoreConfirm = true
+                    } catch {
+                        pendingRestore = nil
+                        errorMessage = "Restore failed: \(error.localizedDescription)"
+                    }
+                }
+            }
         } catch {
             errorMessage = "Restore failed: \(error.localizedDescription)"
-            return
         }
-        
+    }
+    
+    private func checkRestorePassword() {
+        guard let pending = pendingRestore, !restorePassword.isEmpty, !isCheckingRestore else { return }
+        isCheckingRestore = true
+        let password = restorePassword
+        Task {
+            defer { isCheckingRestore = false }
+            do {
+                try await vaultViewModel.authenticateRestore(pending, password: password)
+                showingRestorePassword = false
+                showingRestoreConfirm = true
+            } catch {
+                restorePasswordError = error.localizedDescription
+            }
+        }
+    }
+    
+    private func performRestore(_ pending: VaultViewModel.PendingRestore) {
+        pendingRestore = nil
         // restoreBackup locks the vault (dismissing this view), so later errors are
         // reported on the unlock screen. The user then unlocks with the backup's password.
         do {
-            try vaultViewModel.restoreBackup(data)
+            try vaultViewModel.restoreBackup(pending)
         } catch {
             vaultViewModel.errorMessage = "Restore failed: \(error.localizedDescription)"
         }
+    }
+    
+    private func restoreConfirmMessage(for pending: VaultViewModel.PendingRestore) -> String {
+        let date = pending.backup.timestamp.formatted(date: .abbreviated, time: .shortened)
+        var message = "This replaces every host and credential in the current vault with the backup from \(date). Anything added since will be lost. The vault locks, and you then unlock it with the password that was in use when the backup was made."
+        if pending.isUnauthenticated {
+            message += "\n\nThis backup was made by an older version of SSHoebox, so it can't be checked for tampering. Only restore it if you're sure where it came from."
+        }
+        return message
+    }
+    
+    private var restorePasswordSheet: some View {
+        VStack(spacing: 16) {
+            Text("Backup From Another Vault")
+                .font(.headline)
+            Text("This backup belongs to a different vault. Enter that vault's master password so the backup can be checked before it replaces this one.")
+                .font(.callout)
+                .foregroundStyle(DesignSystem.Colors.textSecondary)
+                .multilineTextAlignment(.center)
+            SecureField("Backup's Master Password", text: $restorePassword)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 280)
+                .onSubmit { checkRestorePassword() }
+            if let restorePasswordError {
+                Text(restorePasswordError)
+                    .font(.caption)
+                    .foregroundStyle(DesignSystem.Colors.error)
+            }
+            HStack {
+                Button("Cancel") {
+                    pendingRestore = nil
+                    showingRestorePassword = false
+                }
+                .keyboardShortcut(.cancelAction)
+                Button {
+                    checkRestorePassword()
+                } label: {
+                    if isCheckingRestore { ProgressView().controlSize(.small) } else { Text("Continue") }
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(restorePassword.isEmpty || isCheckingRestore)
+            }
+        }
+        .padding(24)
+        .frame(width: 400)
     }
     
     func performBackup() {
@@ -164,7 +261,7 @@ struct BackupView: View {
             do {
                 guard backupFolder != "No folder selected" else { return }
                 
-                let data = try backupManager.createExportData(vaultMetadata: vaultViewModel.currentVaultMetadata())
+                let data = try makeExportData()
                 let folder = backupFolder // Capture for detached task
                 
                 // OFF-LOAD: Move direct file operations to a detached task

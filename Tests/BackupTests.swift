@@ -42,7 +42,7 @@ final class BackupTests: XCTestCase {
         do {
             let dbManager = try DatabaseManager(path: dbPath, key: dbKey)
             try dbManager.dbWriter.write { db in try host.save(db) }
-            exportData = try BackupManager(dbManager: dbManager).createExportData(vaultMetadata: metadata)
+            exportData = try BackupManager(dbManager: dbManager).createExportData(vaultMetadata: metadata, vaultKey: vaultKey)
         }
 
         let backup = try BackupManager.verify(exportData)
@@ -66,7 +66,7 @@ final class BackupTests: XCTestCase {
 
     func testExportRejectsInvalidMetadata() throws {
         let dbManager = try DatabaseManager(path: dbPath, key: dbKey)
-        XCTAssertThrowsError(try BackupManager(dbManager: dbManager).createExportData(vaultMetadata: Data("{}".utf8)))
+        XCTAssertThrowsError(try BackupManager(dbManager: dbManager).createExportData(vaultMetadata: Data("{}".utf8), vaultKey: vaultKey))
     }
 
     func testChecksumValidation() throws {
@@ -95,6 +95,48 @@ final class BackupTests: XCTestCase {
 
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: metadataPath)), current)
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: dbPath)), data)
+    }
+
+    private func makeAuthenticatedBackup() throws -> VaultBackup {
+        let dbManager = try DatabaseManager(path: dbPath, key: dbKey)
+        let data = try BackupManager(dbManager: dbManager).createExportData(vaultMetadata: makeMetadata(), vaultKey: vaultKey)
+        return try BackupManager.verify(data)
+    }
+
+    func testBackupIsAuthenticOnlyWithItsVaultKey() throws {
+        let backup = try makeAuthenticatedBackup()
+        XCTAssertNotNil(backup.authenticationCode)
+        XCTAssertTrue(backup.isAuthentic(using: vaultKey))
+        XCTAssertFalse(backup.isAuthentic(using: CryptoManager.generateRandomKey()))
+    }
+
+    func testTamperedBackupIsNotAuthentic() throws {
+        let backup = try makeAuthenticatedBackup()
+        var tamperedDB = backup.vaultData
+        tamperedDB[tamperedDB.count - 1] ^= 0x01
+        // Recomputing the plain checksum is easy; the MAC is what catches it.
+        let swappedDB = VaultBackup(version: backup.version, timestamp: backup.timestamp, vaultData: tamperedDB,
+                                    vaultMetadata: backup.vaultMetadata, checksum: SHA256.hash(data: tamperedDB).description,
+                                    authenticationCode: backup.authenticationCode)
+        XCTAssertFalse(try BackupManager.verify(try encode(swappedDB)).isAuthentic(using: vaultKey))
+
+        let swappedMetadata = VaultBackup(version: backup.version, timestamp: backup.timestamp, vaultData: backup.vaultData,
+                                          vaultMetadata: try makeMetadata(), checksum: backup.checksum,
+                                          authenticationCode: backup.authenticationCode)
+        XCTAssertFalse(try BackupManager.verify(try encode(swappedMetadata)).isAuthentic(using: vaultKey))
+    }
+
+    func testV4BackupWithoutMACIsRejected() throws {
+        let backup = try makeAuthenticatedBackup()
+        let stripped = VaultBackup(version: 4, timestamp: backup.timestamp, vaultData: backup.vaultData,
+                                   vaultMetadata: backup.vaultMetadata, checksum: backup.checksum)
+        XCTAssertThrowsError(try BackupManager.verify(try encode(stripped)))
+    }
+
+    func testExportRejectsMetadataOfAnotherVault() throws {
+        let dbManager = try DatabaseManager(path: dbPath, key: dbKey)
+        XCTAssertThrowsError(try BackupManager(dbManager: dbManager).createExportData(
+            vaultMetadata: makeMetadata(), vaultKey: CryptoManager.generateRandomKey()))
     }
 
     func testFutureVersionIsRejected() throws {
