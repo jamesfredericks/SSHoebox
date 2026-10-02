@@ -12,6 +12,7 @@ struct HostListView: View {
     @State private var showingManageGroups = false
     @State private var showingImportSSHConfig = false
     @State private var showingImportCredentials = false
+    @State private var hostToDelete: SavedHost?
 
     init(dbManager: DatabaseManager, vaultKey: SymmetricKey) {
         self.dbManager = dbManager
@@ -105,6 +106,15 @@ struct HostListView: View {
         .sheet(isPresented: $showingImportCredentials, onDismiss: { viewModel.fetchHosts() }) {
             ImportCredentialsSheet(viewModel: viewModel)
         }
+        .alert("Delete Host", isPresented: Binding(
+            get: { hostToDelete != nil },
+            set: { if !$0 { hostToDelete = nil } }
+        ), presenting: hostToDelete) { host in
+            Button("Cancel", role: .cancel) { }
+            Button("Delete", role: .destructive) { viewModel.deleteHost(host) }
+        } message: { host in
+            Text("Are you sure you want to delete '\(host.decryptedName(using: vaultKey))'? Its credentials are deleted too, and open sessions to it are closed. This can't be undone.")
+        }
         .onAppear {
             let registry = sessionRegistry
             viewModel.onHostDeleted = { [weak registry] hostId in registry?.removeStore(for: hostId) }
@@ -155,11 +165,12 @@ struct HostListView: View {
                         HostCard(host: host, vaultKey: vaultKey)
                     }
                     .buttonStyle(.plain)
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                    // .swipeActions only works on List rows, not inside this LazyVStack.
+                    .contextMenu {
                         Button(role: .destructive) {
-                            viewModel.deleteHost(host)
+                            hostToDelete = host
                         } label: {
-                            Label("Delete", systemImage: "trash")
+                            Label("Delete…", systemImage: "trash")
                         }
                     }
                 }
