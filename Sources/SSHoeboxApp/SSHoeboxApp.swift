@@ -15,6 +15,8 @@ struct SSHoeboxApp: App {
     @StateObject private var sessionRegistry: TerminalSessionRegistry
     @ObservedObject private var themeManager = ThemeManager.shared
 
+    static let mainWindowID = "main"
+
     init() {
         let viewModel = VaultViewModel()
         let sessionRegistry = TerminalSessionRegistry()
@@ -25,7 +27,8 @@ struct SSHoeboxApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
+        // A single main window: the menu bar's "Open SSHoebox" reopens it after it's closed.
+        Window("SSHoebox", id: Self.mainWindowID) {
             if viewModel.isUnlocked {
                 MainView(viewModel: viewModel)
                     .preferredColorScheme(.dark)
