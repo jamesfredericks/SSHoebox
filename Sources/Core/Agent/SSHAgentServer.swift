@@ -3,10 +3,19 @@ import Darwin
 import NIO
 
 
+/// Serves the OpenSSH agent protocol on a Unix socket.
+///
+/// Each instance binds the socket at most once. `stop()` only removes the socket file
+/// this instance created (matched by device and inode), so an old server shutting down
+/// late can't delete the socket of a newer server that has since bound the same path.
 public class SSHAgentServer {
     private let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
-    private var channel: Channel?
     private let socketPath: String
+    private let lock = NSLock()
+    private var channel: Channel?
+    private var boundSocket: SocketFileID?
+    private var isStarted = false
+    private var isStopped = false
     private weak var delegate: SSHAgentDelegate?
 
     public init(socketPath: String, delegate: SSHAgentDelegate) {
@@ -15,6 +24,11 @@ public class SSHAgentServer {
     }
 
     public func start() async throws {
+        try lock.withLock {
+            guard !isStopped else { throw SSHAgentError.serverStopped }
+            guard !isStarted else { throw SSHAgentError.serverAlreadyStarted }
+            isStarted = true
+        }
         try Self.prepareSocketDirectory(for: socketPath)
         try Self.removeStaleSocket(at: socketPath)
 
@@ -40,27 +54,48 @@ public class SSHAgentServer {
             }
             .childChannelOption(ChannelOptions.socketOption(.so_keepalive), value: 1)
 
-        let channel = try await bootstrap.bind(unixDomainSocketPath: socketPath).get()
-        self.channel = channel
+        // Bind the socket ourselves: a socket bound by NIO's `bind(unixDomainSocketPath:)`
+        // unlinks its path when it closes, which would delete a newer server's socket.
+        let (descriptor, socket) = try Self.bindSocket(at: socketPath)
+        let channel: Channel
+        do {
+            channel = try await bootstrap.withBoundSocket(descriptor).get()
+        } catch {
+            Self.removeSocket(at: socketPath, ifItIs: socket)
+            throw error
+        }
 
-        // The directory is already private, but don't rely on the umask for the socket
-        // itself: connecting needs write access, so 0600 limits it to the owner.
-        guard chmod(socketPath, 0o600) == 0 else {
-            let code = errno
+        // stop() may have run while we were binding; if so, undo the bind here.
+        let keep = lock.withLock { () -> Bool in
+            guard !isStopped else { return false }
+            self.channel = channel
+            self.boundSocket = socket
+            return true
+        }
+        guard keep else {
             try? await channel.close()
-            throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EPERM)
+            Self.removeSocket(at: socketPath, ifItIs: socket)
+            throw SSHAgentError.serverStopped
         }
         print("SSH Agent listening on \(socketPath)")
     }
 
+    /// Closes the listener and removes the socket file if it is still the one this
+    /// server bound. Safe to call more than once, and before `start()` has finished.
     public func stop() async throws {
-        try await channel?.close()
-        try await group.shutdownGracefully()
-
-        // Clean up socket file
-        if FileManager.default.fileExists(atPath: socketPath) {
-            try? FileManager.default.removeItem(atPath: socketPath)
+        let (channel, socket, wasStopped) = lock.withLock { () -> (Channel?, SocketFileID?, Bool) in
+            defer {
+                isStopped = true
+                self.channel = nil
+                boundSocket = nil
+            }
+            return (self.channel, boundSocket, isStopped)
         }
+        guard !wasStopped else { return }
+
+        try? await channel?.close()
+        Self.removeSocket(at: socketPath, ifItIs: socket)
+        try await group.shutdownGracefully()
     }
 
     // MARK: - Socket security
@@ -96,6 +131,62 @@ public class SSHAgentServer {
         guard unlink(socketPath) == 0 || errno == ENOENT else {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EPERM)
         }
+    }
+
+    /// Identifies a socket file by device and inode, which change whenever the path is
+    /// unlinked and bound again.
+    struct SocketFileID: Equatable {
+        let device: dev_t
+        let inode: ino_t
+
+        init?(path: String) {
+            var info = stat()
+            guard lstat(path, &info) == 0, info.st_mode & S_IFMT == S_IFSOCK else { return nil }
+            device = info.st_dev
+            inode = info.st_ino
+        }
+    }
+
+    /// Creates a Unix stream socket bound to `path` and restricts the socket file to the
+    /// owner. NIO starts listening on the descriptor.
+    private static func bindSocket(at path: String) throws -> (CInt, SocketFileID) {
+        func posixError() -> POSIXError { POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let pathBytes = Array(path.utf8)
+        guard pathBytes.count < MemoryLayout.size(ofValue: address.sun_path) else {
+            throw SSHAgentError.socketPathTooLong(path)
+        }
+        withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: pathBytes) }
+
+        let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard descriptor >= 0 else { throw posixError() }
+        let bound = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        guard bound == 0, let socket = SocketFileID(path: path) else {
+            let error = posixError()
+            close(descriptor)
+            throw error
+        }
+
+        // The directory is already private, but don't rely on the umask for the socket
+        // itself: connecting needs write access, so 0600 limits it to the owner.
+        guard chmod(path, 0o600) == 0 else {
+            let error = posixError()
+            close(descriptor)
+            removeSocket(at: path, ifItIs: socket)
+            throw error
+        }
+        return (descriptor, socket)
+    }
+
+    static func removeSocket(at path: String, ifItIs socket: SocketFileID?) {
+        guard let socket = socket, SocketFileID(path: path) == socket else { return }
+        unlink(path)
     }
 
     /// Reads the connecting process's effective uid via `LOCAL_PEERCRED`.

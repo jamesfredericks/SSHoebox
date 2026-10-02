@@ -105,4 +105,10 @@ public enum SSHAgentError: Error {
     case insecureSocketDirectory(String)
     /// Something other than a socket already exists at the socket path.
     case socketPathInUse(String)
+    /// The socket path doesn't fit in `sockaddr_un.sun_path` (104 bytes on macOS).
+    case socketPathTooLong(String)
+    /// `start()` was called on a server that has been stopped.
+    case serverStopped
+    /// `start()` was called twice on the same server.
+    case serverAlreadyStarted
 }

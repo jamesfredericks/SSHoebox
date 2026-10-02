@@ -110,7 +110,55 @@ final class SSHAgentTests: XCTestCase {
         } catch SSHAgentError.socketPathInUse {
             // expected
         }
+        try await server.stop()
         XCTAssertEqual(FileManager.default.contents(atPath: socketPath), Data("keep me".utf8))
+    }
+
+    // MARK: - Lifecycle
+
+    func testLateStopOfOldServerKeepsNewServersSocket() async throws {
+        let old = SSHAgentServer(socketPath: socketPath, delegate: delegate)
+        try await old.start()
+        // A restart where the new server binds before the old one has finished stopping.
+        _ = try await startServer()
+        try await old.stop()
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: socketPath),
+                      "The old server must not delete the new server's socket")
+        let client = try AgentTestClient(path: socketPath)
+        try client.send(message: [SSHAgentMessage.SSH2_AGENTC_REQUEST_IDENTITIES])
+        XCTAssertEqual(try client.readFrame().first, SSHAgentMessage.SSH2_AGENT_IDENTITIES_ANSWER)
+    }
+
+    func testStopRemovesOwnSocket() async throws {
+        let server = try await startServer()
+        try await server.stop()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: socketPath))
+        try await server.stop() // idempotent
+    }
+
+    func testRejectsSocketPathTooLongForSunPath() async throws {
+        let longPath = directory + "/" + String(repeating: "a", count: 110) + ".sock"
+        let server = SSHAgentServer(socketPath: longPath, delegate: delegate)
+        do {
+            try await server.start()
+            XCTFail("A path longer than sun_path must be rejected, not truncated")
+        } catch SSHAgentError.socketPathTooLong {
+            // expected
+        }
+        try await server.stop()
+    }
+
+    func testStartAfterStopFails() async throws {
+        let server = SSHAgentServer(socketPath: socketPath, delegate: delegate)
+        try await server.stop()
+        do {
+            try await server.start()
+            XCTFail("A stopped server must not start")
+        } catch SSHAgentError.serverStopped {
+            // expected
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: socketPath))
     }
 
     // MARK: - Ordering

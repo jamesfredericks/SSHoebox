@@ -499,31 +499,43 @@ class VaultViewModel: ObservableObject {
     
     // MARK: - SSH Agent Management
     
+    /// Tail of the agent start/stop chain. Each step waits for the previous one, so on a
+    /// restart the new server only binds once the old one has fully shut down.
+    private var agentLifecycle: Task<Void, Never>?
+
     func startAgent() {
         guard isAgentEnabled, let socketPath = agentSocketPath else { return }
         print("Starting SSH Agent at \(socketPath)")
-        
+
         // Ensure only one instance
         stopAgent()
-        
-        agentServer = SSHAgentServer(socketPath: socketPath, delegate: self)
-        Task {
+
+        let server = SSHAgentServer(socketPath: socketPath, delegate: self)
+        agentServer = server
+        enqueueAgentLifecycle { [weak self] in
             do {
-                try await agentServer?.start()
+                try await server.start()
             } catch {
-                await MainActor.run {
-                    self.errorMessage = "Failed to start SSH Agent: \(error.localizedDescription)"
-                }
+                // Not an error if this server was already replaced or stopped.
+                guard let self = self, self.agentServer === server else { return }
+                self.errorMessage = "Failed to start SSH Agent: \(error.localizedDescription)"
             }
         }
     }
-    
+
     func stopAgent() {
-        if let server = agentServer {
-            Task {
-                try? await server.stop()
-            }
-            agentServer = nil
+        guard let server = agentServer else { return }
+        agentServer = nil
+        enqueueAgentLifecycle {
+            try? await server.stop()
+        }
+    }
+
+    private func enqueueAgentLifecycle(_ work: @escaping @MainActor () async -> Void) {
+        let previous = agentLifecycle
+        agentLifecycle = Task { @MainActor in
+            await previous?.value
+            await work()
         }
     }
     
