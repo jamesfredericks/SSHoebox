@@ -26,7 +26,11 @@ struct GeneratorView: View {
                     .padding()
             }
             .padding(.horizontal)
-            
+
+            Text("~\(Int(PasswordGenerator.entropyBits(options: viewModel.options))) bits of entropy")
+                .font(.caption)
+                .foregroundStyle(DesignSystem.Colors.textSecondary)
+
             // Actions
             HStack {
                 Button(action: {

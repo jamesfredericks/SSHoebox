@@ -3,7 +3,7 @@ import Foundation
 public enum GeneratorType: String, CaseIterable, Identifiable {
     case password = "Password"
     case passphrase = "Passphrase"
-    
+
     public var id: String { self.rawValue }
 }
 
@@ -15,28 +15,24 @@ public struct GeneratorOptions {
     public var useSymbols: Bool = true
     public var avoidAmbiguous: Bool = false
     public var type: GeneratorType = .password
-    public var passphraseWords: Int = 4
+    /// 6 EFF words is ~77.5 bits of entropy.
+    public var passphraseWords: Int = 6
     public var separator: String = "-"
-    
+
     public init() {}
 }
 
 public struct PasswordGenerator {
-    
+
     private static let lowercase = "abcdefghijklmnopqrstuvwxyz"
     private static let uppercase = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     private static let digits = "0123456789"
     private static let symbols = "!@#$%^&*()_+-=[]{}|;:,.<>?"
     private static let ambiguous = "O0l1I"
-    
-    // Simple word list for passphrase (normally this would be much larger)
-    private static let wordList = [
-        "apple", "brave", "crane", "drift", "eagle", "forest", "grape", "hill",
-        "island", "jump", "kite", "lemon", "mountain", "nebula", "ocean", "piano",
-        "quiet", "river", "stone", "train", "umbrella", "valley", "window", "xenon",
-        "yellow", "zebra", "happy", "sunny", "swift", "code", "secure", "safe", "lock"
-    ]
-    
+
+    /// EFF large wordlist (7,776 words, ~12.9 bits per word).
+    static var wordList: [String] { EFFWordlist.words }
+
     public static func generate(options: GeneratorOptions) -> String {
         switch options.type {
         case .password:
@@ -45,63 +41,66 @@ public struct PasswordGenerator {
             return generatePassphrase(options: options)
         }
     }
-    
-    private static func generatePassword(options: GeneratorOptions) -> String {
-        var charset = ""
-        var guaranteedChars = ""
-        
-        if options.useLowercase {
-            charset += options.avoidAmbiguous ? removeAmbiguous(from: lowercase) : lowercase
-            guaranteedChars.append(randomChar(from: options.avoidAmbiguous ? removeAmbiguous(from: lowercase) : lowercase))
+
+    /// Approximate entropy of a value generated with `options`, in bits.
+    /// Passwords: length x log2(charset size) (slightly generous, since one
+    /// character from each enabled set is guaranteed). Passphrases:
+    /// words x log2(7,776).
+    public static func entropyBits(options: GeneratorOptions) -> Double {
+        switch options.type {
+        case .password:
+            let size = characterSets(options: options).joined().count
+            return Double(max(0, options.length)) * log2(Double(size))
+        case .passphrase:
+            return Double(max(0, options.passphraseWords)) * log2(Double(wordList.count))
         }
-        if options.useUppercase {
-            charset += options.avoidAmbiguous ? removeAmbiguous(from: uppercase) : uppercase
-            guaranteedChars.append(randomChar(from: options.avoidAmbiguous ? removeAmbiguous(from: uppercase) : uppercase))
-        }
-        if options.useDigits {
-            charset += options.avoidAmbiguous ? removeAmbiguous(from: digits) : digits
-            guaranteedChars.append(randomChar(from: options.avoidAmbiguous ? removeAmbiguous(from: digits) : digits))
-        }
-        if options.useSymbols {
-            charset += options.avoidAmbiguous ? removeAmbiguous(from: symbols) : symbols
-            guaranteedChars.append(randomChar(from: options.avoidAmbiguous ? removeAmbiguous(from: symbols) : symbols))
-        }
-        
-        // Fallback if nothing selected
-        if charset.isEmpty {
-            charset = lowercase
-        }
-        
-        // Fill remaining length
-        let remainingLength = max(0, options.length - guaranteedChars.count)
-        var password = guaranteedChars
-        
-        for _ in 0..<remainingLength {
-            password.append(randomChar(from: charset))
-        }
-        
-        // Shuffle result
-        return String(password.shuffled())
     }
-    
-    private static func generatePassphrase(options: GeneratorOptions) -> String {
-        var words: [String] = []
-        for _ in 0..<options.passphraseWords {
-            if let word = wordList.randomElement() {
-                words.append(word)
-            }
+
+    /// The enabled character sets, with ambiguous characters removed if requested.
+    /// Falls back to lowercase if nothing is enabled.
+    private static func characterSets(options: GeneratorOptions) -> [String] {
+        var sets: [String] = []
+        if options.useLowercase { sets.append(lowercase) }
+        if options.useUppercase { sets.append(uppercase) }
+        if options.useDigits { sets.append(digits) }
+        if options.useSymbols { sets.append(symbols) }
+        if sets.isEmpty { sets.append(lowercase) }
+        return options.avoidAmbiguous ? sets.map(removeAmbiguous(from:)) : sets
+    }
+
+    private static func generatePassword(options: GeneratorOptions) -> String {
+        var rng = SystemRandomNumberGenerator()
+        let length = max(0, options.length)
+        let sets = characterSets(options: options)
+        let charset = sets.joined()
+
+        // One character from each enabled set, then fill the remaining length
+        var password = sets.prefix(length).map { randomChar(from: $0, using: &rng) }
+        while password.count < length {
+            password.append(randomChar(from: charset, using: &rng))
         }
-        // Apply simple capitalization if desired? 
-        // For now, let's auto-capitalize logical first letter if separator is typical, or keep lowercase via logic.
-        // Let's implement options later for passphrase specifics. Default to lowercase.
+
+        // Shuffle so the guaranteed characters aren't always at the front
+        password.shuffle(using: &rng)
+        return String(password)
+    }
+
+    private static func generatePassphrase(options: GeneratorOptions) -> String {
+        var rng = SystemRandomNumberGenerator()
+        let words = (0..<max(0, options.passphraseWords)).compactMap { _ in
+            wordList.randomElement(using: &rng)
+        }
+        // Four EFF words contain a hyphen (e.g. "t-shirt"), so a hyphen-separated
+        // passphrase can't always be split back into words. This doesn't
+        // meaningfully reduce entropy.
         return words.joined(separator: options.separator)
     }
-    
+
     private static func removeAmbiguous(from source: String) -> String {
         return source.filter { !ambiguous.contains($0) }
     }
-    
-    private static func randomChar(from source: String) -> Character {
-        return source.randomElement() ?? " "
+
+    private static func randomChar(from source: String, using rng: inout SystemRandomNumberGenerator) -> Character {
+        return source.randomElement(using: &rng) ?? " "
     }
 }
