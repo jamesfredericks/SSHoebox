@@ -37,6 +37,11 @@ public class SSHSessionManager: ObservableObject {
     private var stdinWriter: TTYStdinWriter?
     private var logBuffer: [Data] = []
     private var currentTerminalSize: (cols: Int, rows: Int) = (80, 24)
+
+    // A keyboard-interactive prompt waiting for the user's answer. While one is open, keystrokes
+    // go to it rather than to the shell, which doesn't exist until login completes.
+    private var promptReader: TerminalLineReader?
+    private var promptContinuation: CheckedContinuation<String?, Never>?
     
     public var onOutput: ((Data) -> Void)? {
         didSet {
@@ -60,6 +65,9 @@ public class SSHSessionManager: ObservableObject {
 
     // MARK: - Connect (Password)
 
+    /// Logs in with `password`, by password auth or, when the server only takes keyboard-interactive
+    /// (PAM, often followed by a one-time code), by answering its password prompt. Any other
+    /// prompt is put to the user in the terminal.
     public func connect(
         host: String,
         port: Int = 22,
@@ -68,14 +76,10 @@ public class SSHSessionManager: ObservableObject {
         terminalSize: (cols: Int, rows: Int) = (80, 24)
     ) async {
         guard let (validator, capturer) = buildValidator(for: host, port: port) else { return }
-        var settings = SSHClientSettings(
-            host: host,
-            port: port,
-            authenticationMethod: { .passwordBased(username: username, password: password) },
-            hostKeyValidator: validator
-        )
-        settings.algorithms = .all
-        await startSession(settings: settings, terminalSize: terminalSize, capturer: capturer)
+        await startSession(terminalSize: terminalSize, capturer: capturer) { generation in
+            self.interactiveSettings(host: host, port: port, username: username, password: password,
+                                     validator: validator, generation: generation)
+        }
     }
 
     // MARK: - Connect (Ed25519 Key)
@@ -95,7 +99,7 @@ public class SSHSessionManager: ObservableObject {
             hostKeyValidator: validator
         )
         settings.algorithms = .all
-        await startSession(settings: settings, terminalSize: terminalSize, capturer: capturer)
+        await startSession(terminalSize: terminalSize, capturer: capturer) { _ in settings }
     }
 
     // MARK: - Connect (PEM Key — parses Ed25519, falls back to interactive)
@@ -136,6 +140,8 @@ public class SSHSessionManager: ObservableObject {
 
     // MARK: - Connect (Interactive / YubiKey)
 
+    /// Logs in by keyboard-interactive with nothing stored: every prompt (password, one-time
+    /// code, YubiKey) is answered by the user in the terminal.
     public func connectInteractive(
         host: String,
         port: Int = 22,
@@ -143,16 +149,67 @@ public class SSHSessionManager: ObservableObject {
         terminalSize: (cols: Int, rows: Int) = (80, 24)
     ) async {
         guard let (validator, capturer) = buildValidator(for: host, port: port) else { return }
-        let delegate = KeyboardInteractiveDelegate(username: username)
-        delegate.onOutput = self.onOutput
+        await startSession(terminalSize: terminalSize, capturer: capturer) { generation in
+            self.interactiveSettings(host: host, port: port, username: username, password: nil,
+                                     validator: validator, generation: generation)
+        }
+    }
+
+    private func interactiveSettings(
+        host: String,
+        port: Int,
+        username: String,
+        password: String?,
+        validator: SSHHostKeyValidator,
+        generation: Int
+    ) -> SSHClientSettings {
+        let ask: KeyboardInteractiveAuthenticator.Ask = { [weak self] prompt, echo in
+            guard let self else { return nil }
+            return await self.promptUser(prompt, echo: echo, generation: generation)
+        }
+        let show: KeyboardInteractiveAuthenticator.Show = { [weak self] text in
+            await self?.showPromptText(text, generation: generation)
+        }
         var settings = SSHClientSettings(
             host: host,
             port: port,
-            authenticationMethod: { .custom(delegate) },
+            authenticationMethod: {
+                .custom(KeyboardInteractiveAuthenticator(username: username, password: password, ask: ask, show: show))
+            },
             hostKeyValidator: validator
         )
         settings.algorithms = .all
-        await startSession(settings: settings, terminalSize: terminalSize, capturer: capturer)
+        // Leave time to type a one-time code; the server's own LoginGraceTime still applies.
+        settings.loginTimeout = .seconds(180)
+        return settings
+    }
+
+    // MARK: - Login Prompts
+
+    /// Shows `prompt` in the terminal and waits for the user to type an answer and press Return.
+    /// Returns nil if they cancel (Ctrl-C) or the session is torn down first.
+    private func promptUser(_ prompt: String, echo: Bool, generation: Int) async -> String? {
+        // A superseded connection mustn't prompt in its replacement's terminal.
+        guard generation == self.generation else { return nil }
+        cancelPrompt()
+        showPromptText(prompt, generation: generation)
+        return await withCheckedContinuation { continuation in
+            promptReader = TerminalLineReader(echo: echo)
+            promptContinuation = continuation
+        }
+    }
+
+    private func showPromptText(_ text: String, generation: Int) {
+        guard generation == self.generation else { return }
+        let terminalText = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\n", with: "\r\n")
+        emit(Data(terminalText.utf8))
+    }
+
+    private func cancelPrompt() {
+        let continuation = promptContinuation
+        promptReader = nil
+        promptContinuation = nil
+        continuation?.resume(returning: nil)
     }
 
     // MARK: - Host Key Validation (TOFU)
@@ -176,7 +233,10 @@ public class SSHSessionManager: ObservableObject {
     
     public func log(_ msg: String, color: String = "36") {
         let text = "\r\n\u{1B}[\(color)m\(msg)\u{1B}[0m\r\n"
-        let data = Data(text.utf8)
+        emit(Data(text.utf8))
+    }
+
+    private func emit(_ data: Data) {
         if let onOutput = onOutput {
             onOutput(data)
         } else {
@@ -186,15 +246,18 @@ public class SSHSessionManager: ObservableObject {
     
     // MARK: - Internal Session
     
+    /// `makeSettings` gets the new session's generation, so anything the settings call back into
+    /// (login prompts) can tell whether its session is still the current one.
     private func startSession(
-        settings: SSHClientSettings,
         terminalSize: (cols: Int, rows: Int),
-        capturer: CapturingHostKeyValidator? = nil
+        capturer: CapturingHostKeyValidator? = nil,
+        makeSettings: (_ generation: Int) -> SSHClientSettings
     ) async {
         // A reconnect replaces any previous session, so close its connection first.
         tearDown()
         generation += 1
         let gen = generation
+        let settings = makeSettings(gen)
         connectionState = .connecting
 
         // Snapshot repo reference for use inside the Task (avoids actor isolation issues)
@@ -343,6 +406,8 @@ public class SSHSessionManager: ObservableObject {
                 try? await openedClient?.close()
                 // A deliberate disconnect makes the in-flight session throw; that isn't a failure.
                 guard self.generation == gen else { return }
+                // Login failed or timed out while a prompt was open: close it.
+                self.cancelPrompt()
                 self.client = nil
                 self.stdinWriter = nil
                 await MainActor.run {
@@ -360,7 +425,23 @@ public class SSHSessionManager: ObservableObject {
     
     /// Send keystrokes from the terminal view to the SSH session.
     public func send(_ data: Data) {
-        stdinContinuation?.yield(data)
+        guard var reader = promptReader else {
+            stdinContinuation?.yield(data)
+            return
+        }
+        let (output, event) = reader.feed(data)
+        if !output.isEmpty { emit(output) }
+        switch event {
+        case .pending:
+            promptReader = reader
+        case .submitted(let line):
+            let continuation = promptContinuation
+            promptReader = nil
+            promptContinuation = nil
+            continuation?.resume(returning: line)
+        case .cancelled:
+            cancelPrompt()
+        }
     }
     
     /// Notify the SSH server of a terminal resize.
@@ -389,6 +470,7 @@ public class SSHSessionManager: ObservableObject {
     /// TCP connection (and the authenticated session) open.
     private func tearDown() {
         generation += 1
+        cancelPrompt()
         stdinContinuation?.finish()
         stdinContinuation = nil
         stdinWriter = nil
@@ -420,36 +502,141 @@ public struct SSHPassphraseChallenge: Identifiable {
     public let terminalSize: (cols: Int, rows: Int)
 }
 
-// MARK: - Keyboard Interactive Auth Delegate
+// MARK: - Keyboard-Interactive Authenticator
 
-/// Handles keyboard-interactive SSH authentication (MFA, YubiKey prompts).
-final class KeyboardInteractiveDelegate: NIOSSHClientUserAuthenticationDelegate, @unchecked Sendable {
-    let username: String
-    
-    init(username: String) {
-        self.username = username
+public enum SSHLoginError: Error, CustomStringConvertible {
+    /// The server accepts none of the methods this login can use.
+    case noUsableMethod(String)
+    /// The server rejected every attempt.
+    case rejected
+    /// The user cancelled a login prompt.
+    case cancelled
+
+    public var description: String {
+        switch self {
+        case .noUsableMethod(let methods):
+            return "The server doesn't accept \(methods) login."
+        case .rejected:
+            return "The server rejected the login (wrong password or code?)."
+        case .cancelled:
+            return "Login cancelled."
+        }
     }
-    
+}
+
+/// Password and keyboard-interactive login (RFC 4256). The stored password, if any, answers the
+/// server's first password prompt; every other prompt, such as a one-time code or a YubiKey touch,
+/// is put to the user. Like OpenSSH, it tries each method once and stops when they're used up,
+/// rather than retrying a rejected secret.
+///
+/// NIOSSH calls the delegate methods on the connection's event loop, one at a time, which is
+/// what guards the mutable state.
+final class KeyboardInteractiveAuthenticator: NIOSSHClientUserAuthenticationDelegate, @unchecked Sendable {
+    /// Asks the user to answer `prompt`, showing what they type only when `echo` is true.
+    /// Returns nil if they cancel.
+    typealias Ask = @Sendable (_ prompt: String, _ echo: Bool) async -> String?
+    /// Shows text from the server, or a note about an answer filled in automatically.
+    typealias Show = @Sendable (_ text: String) async -> Void
+
+    private let username: String
+    private let password: String?
+    private let ask: Ask
+    private let show: Show
+
+    private var probed = false
+    private var triedPassword = false
+    private var triedKeyboardInteractive = false
+    /// Set once the stored password has been sent, so a rejected one is never sent again.
+    private var passwordSpent = false
+
+    init(username: String, password: String?, ask: @escaping Ask, show: @escaping Show) {
+        self.username = username
+        self.password = password
+        self.ask = ask
+        self.show = show
+    }
+
     func nextAuthenticationType(
         availableMethods: NIOSSHAvailableUserAuthenticationMethods,
         nextChallengePromise: EventLoopPromise<NIOSSHUserAuthenticationOffer?>
     ) {
-        if availableMethods.contains(.password) || availableMethods.contains(.publicKey) {
+        func offer(_ offer: NIOSSHUserAuthenticationOffer.Offer) {
             nextChallengePromise.succeed(NIOSSHUserAuthenticationOffer(
-                username: username,
-                serviceName: "ssh-connection",
-                offer: .none
-            ))
+                username: username, serviceName: "ssh-connection", offer: offer))
+        }
+
+        // The first round comes before the server has said what it accepts. A `none` request
+        // gets that list without spending one of the server's allowed attempts.
+        guard probed else {
+            probed = true
+            offer(.none)
+            return
+        }
+
+        if let password, !triedPassword, availableMethods.contains(.password) {
+            triedPassword = true
+            passwordSpent = true
+            offer(.password(.init(password: password)))
+        } else if !triedKeyboardInteractive, availableMethods.contains(.keyboardInteractive) {
+            triedKeyboardInteractive = true
+            offer(.keyboardInteractive(.init()))
+        } else if triedPassword || triedKeyboardInteractive {
+            nextChallengePromise.fail(SSHLoginError.rejected)
         } else {
-            nextChallengePromise.fail(CitadelError.unsupported)
+            nextChallengePromise.fail(SSHLoginError.noUsableMethod(
+                password == nil ? "keyboard-interactive" : "password or keyboard-interactive"))
         }
     }
-    
-    private func log(_ msg: String) {
-        let text = "\r\n\u{1B}[35m\(msg)\u{1B}[0m\r\n"
-        onOutput?(Data(text.utf8))
-    }
-    
-    var onOutput: ((Data) -> Void)?
-}
 
+    func respondToKeyboardInteractiveChallenge(
+        _ challenge: NIOSSHKeyboardInteractiveChallenge,
+        responsePromise: EventLoopPromise<[String]>
+    ) {
+        enum Answer {
+            case stored(prompt: String, password: String)
+            case ask(prompt: String, echo: Bool)
+        }
+
+        // Decide which prompts the stored password answers here, on the event loop.
+        let answers: [Answer] = challenge.prompts.map { prompt in
+            if let password, !passwordSpent, !prompt.echo, Self.isPasswordPrompt(prompt.prompt) {
+                passwordSpent = true
+                return .stored(prompt: prompt.prompt, password: password)
+            }
+            return .ask(prompt: prompt.prompt, echo: prompt.echo)
+        }
+        let header = [challenge.name, challenge.instruction].filter { !$0.isEmpty }
+        let ask = self.ask
+        let show = self.show
+
+        Task {
+            for line in header {
+                await show(line.hasSuffix("\n") ? line : line + "\n")
+            }
+            var responses: [String] = []
+            for answer in answers {
+                switch answer {
+                case .stored(let prompt, let password):
+                    await show("\(prompt)\u{1B}[2m(from vault)\u{1B}[0m\n")
+                    responses.append(password)
+                case .ask(let prompt, let echo):
+                    guard let response = await ask(prompt, echo) else {
+                        responsePromise.fail(SSHLoginError.cancelled)
+                        return
+                    }
+                    responses.append(response)
+                }
+            }
+            responsePromise.succeed(responses)
+        }
+    }
+
+    /// Whether a prompt asks for the account password, as PAM's "Password: " does, rather than
+    /// a one-time code ("Verification code: ", "One-time password (OATH) for ...").
+    static func isPasswordPrompt(_ prompt: String) -> Bool {
+        let text = prompt.lowercased()
+        guard text.contains("password") else { return false }
+        let oneTimeMarkers = ["one-time", "one time", "otp", "oath", "token", "code", "passcode", "new password"]
+        return !oneTimeMarkers.contains { text.contains($0) }
+    }
+}
