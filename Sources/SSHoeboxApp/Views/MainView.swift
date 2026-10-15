@@ -81,8 +81,12 @@ struct MainView: View {
         .onAppear {
             let registry = sessionRegistry
             viewModel.activeSessionCount = { registry.totalActiveConnections }
-            let timeout = UserDefaults.standard.integer(forKey: "clipboardClearTimeout")
-            ClipboardManager.shared.clipboardClearTimeout = timeout == 0 ? 30 : timeout
+            ClipboardManager.shared.clipboardClearTimeout = ClipboardManager.savedClearTimeout
+        }
+        // Offered after the first unlock of a vault without Touch ID. Attached here, not to the
+        // unlock screen, because that screen is gone as soon as the vault opens.
+        .sheet(isPresented: $viewModel.showBiometricSetupPrompt) {
+            BiometricSetupSheet(viewModel: viewModel)
         }
         .overlay(alignment: .bottom) {
             ClipboardStatusBadge()

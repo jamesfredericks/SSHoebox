@@ -17,7 +17,8 @@ let package = Package(
     ],
     dependencies: [
         // .package(path: "/Users/joannisorlandos/git/joannis/swift-nio-ssh"),
-        .package(url: "https://github.com/Joannis/swift-nio-ssh.git", "0.3.4" ..< "0.4.0"),
+        // Vendored locally: adds keyboard-interactive client auth (RFC 4256) on top of 0.3.5.
+        .package(path: "../swift-nio-ssh"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.0.0"),
         .package(url: "https://github.com/attaswift/BigInt.git", from: "5.2.0"),
         .package(url: "https://github.com/apple/swift-crypto.git", from: "3.12.3"),

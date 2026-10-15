@@ -11,6 +11,9 @@ class HostsViewModel: ObservableObject {
     @Published var searchQuery: String = ""
     @Published var collapsedGroups: Set<String> = []
 
+    /// Called with a host's id after it is deleted, so its open sessions can be ended.
+    var onHostDeleted: ((String) -> Void)?
+
     private let dbManager: DatabaseManager
     private let repository: HostRepository
     private let groupRepository: GroupRepository
@@ -84,16 +87,12 @@ class HostsViewModel: ObservableObject {
     func addHost(name: String, hostname: String, port: Int, protocolType: String, user: String,
                  groupId: String? = nil,
                  credentialType: String = "none", credentialSecret: String = "") {
-        guard let encryptedName = try? CryptoManager.encryptString(name, using: vaultKey),
-              let encryptedHostname = try? CryptoManager.encryptString(hostname, using: vaultKey),
-              let encryptedUser = try? CryptoManager.encryptString(user, using: vaultKey) else {
+        guard let host = try? SavedHost.encrypted(name: name, hostname: hostname, port: port,
+                                                  protocolType: protocolType, user: user,
+                                                  groupId: groupId, using: vaultKey) else {
             errorMessage = "Failed to encrypt host data."
             return
         }
-
-        let host = SavedHost(name: encryptedName, hostname: encryptedHostname,
-                             port: port, protocolType: protocolType, user: encryptedUser,
-                             groupId: groupId)
         do {
             try repository.save(host)
 
@@ -122,24 +121,22 @@ class HostsViewModel: ObservableObject {
             return
         }
 
-        guard let encryptedName = try? CryptoManager.encryptString(name, using: vaultKey),
-              let encryptedHostname = try? CryptoManager.encryptString(hostname, using: vaultKey),
-              let encryptedUser = try? CryptoManager.encryptString(user, using: vaultKey) else {
+        guard let updatedHost = try? SavedHost.encrypted(
+            id: id,
+            name: name,
+            hostname: hostname,
+            port: port,
+            protocolType: protocolType,
+            user: user,
+            groupId: groupId,
+            createdAt: existingHost.createdAt,
+            updatedAt: Date(),
+            lastConnectedAt: existingHost.lastConnectedAt,
+            using: vaultKey
+        ) else {
             errorMessage = "Failed to encrypt host data."
             return
         }
-
-        let updatedHost = SavedHost(
-            id: id,
-            name: encryptedName,
-            hostname: encryptedHostname,
-            port: port,
-            protocolType: protocolType,
-            user: encryptedUser,
-            groupId: groupId,
-            createdAt: existingHost.createdAt,
-            updatedAt: Date()
-        )
 
         do {
             try repository.save(updatedHost)
@@ -154,6 +151,7 @@ class HostsViewModel: ObservableObject {
             let host = hosts[index]
             do {
                 try repository.delete(host)
+                onHostDeleted?(host.id)
             } catch {
                 errorMessage = "Failed to delete host: \(error.localizedDescription)"
             }
@@ -164,6 +162,7 @@ class HostsViewModel: ObservableObject {
     func deleteHost(_ host: SavedHost) {
         do {
             try repository.delete(host)
+            onHostDeleted?(host.id)
             fetchHosts()
         } catch {
             errorMessage = "Failed to delete host: \(error.localizedDescription)"

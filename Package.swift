@@ -43,5 +43,12 @@ let package = Package(
             dependencies: ["SSHoeboxCore"],
             path: "Tests"
         ),
+        // App-level tests (VaultViewModel flows). They build the app target, so they need
+        // SwiftTerm to compile too.
+        .testTarget(
+            name: "SSHoeboxAppTests",
+            dependencies: ["SSHoeboxApp", "SSHoeboxCore"],
+            path: "AppTests"
+        ),
     ]
 )

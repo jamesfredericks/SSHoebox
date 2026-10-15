@@ -22,6 +22,11 @@ enum SSHAgentMessage {
 
 struct SSHAgentProtocol {
     
+    /// Largest message body the agent accepts, matching OpenSSH's `AGENT_MAX_LEN`.
+    /// Anything bigger is treated as hostile and the connection is dropped, so a local
+    /// process can't make the app buffer up to 4 GiB by sending a huge length prefix.
+    static let maxMessageLength = 256 * 1024
+    
     static func parse(buffer: inout ByteBuffer) throws -> SSHAgentMessage {
         guard let messageType = buffer.readInteger(as: UInt8.self) else {
             throw SSHAgentError.invalidMessage
@@ -93,4 +98,17 @@ struct SSHAgentProtocol {
 public enum SSHAgentError: Error {
     case invalidMessage
     case unknownMessageType(UInt8)
+    case messageTooLarge(UInt32)
+    /// A connection from another user (or whose credentials couldn't be read).
+    case unauthorizedPeer(uid: uid_t?)
+    /// The socket's directory isn't a directory owned by the current user.
+    case insecureSocketDirectory(String)
+    /// Something other than a socket already exists at the socket path.
+    case socketPathInUse(String)
+    /// The socket path doesn't fit in `sockaddr_un.sun_path` (104 bytes on macOS).
+    case socketPathTooLong(String)
+    /// `start()` was called on a server that has been stopped.
+    case serverStopped
+    /// `start()` was called twice on the same server.
+    case serverAlreadyStarted
 }

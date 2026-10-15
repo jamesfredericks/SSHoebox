@@ -11,12 +11,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 @MainActor
 struct SSHoeboxApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    @StateObject private var viewModel = VaultViewModel()
-    @StateObject private var sessionRegistry = TerminalSessionRegistry()
+    @StateObject private var viewModel: VaultViewModel
+    @StateObject private var sessionRegistry: TerminalSessionRegistry
     @ObservedObject private var themeManager = ThemeManager.shared
 
+    static let mainWindowID = "main"
+
+    init() {
+        let viewModel = VaultViewModel()
+        let sessionRegistry = TerminalSessionRegistry()
+        // Wired here rather than in a view so it works even with the main window closed.
+        viewModel.onLock = { [weak sessionRegistry] in sessionRegistry?.removeAll() }
+        _viewModel = StateObject(wrappedValue: viewModel)
+        _sessionRegistry = StateObject(wrappedValue: sessionRegistry)
+    }
+
     var body: some Scene {
-        WindowGroup {
+        // A single main window: the menu bar's "Open SSHoebox" reopens it after it's closed.
+        Window("SSHoebox", id: Self.mainWindowID) {
             if viewModel.isUnlocked {
                 MainView(viewModel: viewModel)
                     .preferredColorScheme(.dark)

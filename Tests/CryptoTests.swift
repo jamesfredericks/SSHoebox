@@ -33,21 +33,21 @@ final class CryptoTests: XCTestCase {
     
     func testKeyDerivationConsistency() throws {
         let password = "MySecurePassword123"
-        let salt = CryptoManager.generateSalt()
+        let salt = try CryptoManager.generateSalt()
         
-        let key1 = try CryptoManager.deriveKey(password: password, salt: salt)
-        let key2 = try CryptoManager.deriveKey(password: password, salt: salt)
+        let key1 = try CryptoManager.deriveKey(password: password, salt: salt, iterations: 1_000)
+        let key2 = try CryptoManager.deriveKey(password: password, salt: salt, iterations: 1_000)
         
         XCTAssertEqual(key1.withUnsafeBytes { Data($0) }, key2.withUnsafeBytes { Data($0) }, "Deriving key twice with same inputs should yield same key")
     }
     
     func testKeyDerivationUniqueness() throws {
         let password = "MySecurePassword123"
-        let salt1 = CryptoManager.generateSalt()
-        let salt2 = CryptoManager.generateSalt()
+        let salt1 = try CryptoManager.generateSalt()
+        let salt2 = try CryptoManager.generateSalt()
         
-        let key1 = try CryptoManager.deriveKey(password: password, salt: salt1)
-        let key2 = try CryptoManager.deriveKey(password: password, salt: salt2)
+        let key1 = try CryptoManager.deriveKey(password: password, salt: salt1, iterations: 1_000)
+        let key2 = try CryptoManager.deriveKey(password: password, salt: salt2, iterations: 1_000)
         
         XCTAssertNotEqual(key1.withUnsafeBytes { Data($0) }, key2.withUnsafeBytes { Data($0) }, "Different salts should yield different keys")
     }

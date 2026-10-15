@@ -8,17 +8,21 @@ public struct DatabaseManager {
         dbWriter
     }
     
-    public init(path: String, passphrase: Data? = nil) throws {
+    /// Opens (or creates) the vault database at `path`.
+    /// - Parameter key: Raw 32-byte SQLCipher key (see `CryptoManager.databaseKey(from:)`).
+    ///   When provided, an existing plaintext database is migrated to SQLCipher first.
+    ///   When nil, the database is opened unencrypted (tests only).
+    public init(path: String, key: Data? = nil) throws {
+        let keyString = try key.map(DatabaseManager.rawKeyString)
         var config = Configuration()
-        if let passphrase = passphrase {
+        if let keyString {
             config.prepareDatabase { db in
-                try db.usePassphrase(passphrase)
+                try db.usePassphrase(keyString)
             }
         }
         
-        // Handle migration if the current DB is plaintext but we want encryption
-        if let passphrase = passphrase, FileManager.default.fileExists(atPath: path) && !DatabaseManager.isDatabaseEncrypted(path: path) {
-            try DatabaseManager.migrateToEncrypted(at: path, passphrase: passphrase)
+        if let keyString, try DatabaseManager.isPlaintextDatabase(path: path) {
+            try DatabaseManager.migrateToEncrypted(at: path, keyString: keyString)
         }
         
         self.dbWriter = try DatabaseQueue(path: path, configuration: config)
@@ -26,49 +30,87 @@ public struct DatabaseManager {
     }
     
     // In-memory initializer for testing
-    public init(inMemory: Bool = true, passphrase: Data? = nil) throws {
+    public init(inMemory: Bool = true, key: Data? = nil) throws {
+        let keyString = try key.map(DatabaseManager.rawKeyString)
         var config = Configuration()
-        if let passphrase = passphrase {
+        if let keyString {
             config.prepareDatabase { db in
-                try db.usePassphrase(passphrase)
+                try db.usePassphrase(keyString)
             }
         }
         self.dbWriter = try DatabaseQueue(configuration: config)
         try migrator.migrate(dbWriter)
     }
     
-    /// Checks if a database is currently encrypted by attempting to read it without a key.
-    private static func isDatabaseEncrypted(path: String) -> Bool {
+    /// SQLCipher raw-key syntax (`x'<64 hex chars>'`). Passing the key this way makes
+    /// SQLCipher use it directly instead of running its own KDF over it, and the same
+    /// string works for both `sqlite3_key` and `ATTACH ... KEY`.
+    private static func rawKeyString(_ key: Data) throws -> String {
+        guard key.count == 32 else {
+            throw DatabaseError(message: "SQLCipher key must be 32 bytes")
+        }
+        return "x'" + key.map { String(format: "%02X", $0) }.joined() + "'"
+    }
+    
+    /// True if the file at `path` exists and starts with the plaintext SQLite header.
+    /// SQLCipher files start with random salt bytes instead.
+    static func isPlaintextDatabase(path: String) throws -> Bool {
+        guard FileManager.default.fileExists(atPath: path) else { return false }
+        let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: path))
+        defer { try? handle.close() }
+        let header = try handle.read(upToCount: 16) ?? Data()
+        return header == Data("SQLite format 3\0".utf8)
+    }
+    
+    /// Migrates a plaintext database to SQLCipher. The encrypted copy is built in a
+    /// temporary file and verified (opens with the key, same row counts) before it
+    /// atomically replaces the original. On any failure the original is left untouched.
+    private static func migrateToEncrypted(at path: String, keyString: String) throws {
+        let fm = FileManager.default
+        let tempPath = path + ".encrypting"
+        try? fm.removeItem(atPath: tempPath)
+        
         do {
-            let db = try DatabaseQueue(path: path)
-            try db.read { db in
-                _ = try Int.fetchOne(db, sql: "SELECT count(*) FROM sqlite_master")
+            let plaintextQueue = try DatabaseQueue(path: path)
+            let expectedCounts = try rowCounts(in: plaintextQueue)
+            try plaintextQueue.inDatabase { db in
+                try db.execute(sql: "ATTACH DATABASE ? AS encrypted KEY ?", arguments: [tempPath, keyString])
+                try db.execute(sql: "SELECT sqlcipher_export('encrypted')")
+                try db.execute(sql: "DETACH DATABASE encrypted")
             }
-            return false // Read succeeded (plaintext)
+            try plaintextQueue.close()
+            
+            var config = Configuration()
+            config.prepareDatabase { db in try db.usePassphrase(keyString) }
+            let encryptedQueue = try DatabaseQueue(path: tempPath, configuration: config)
+            let actualCounts = try rowCounts(in: encryptedQueue)
+            try encryptedQueue.close()
+            guard actualCounts == expectedCounts else {
+                throw DatabaseError(message: "Encrypted copy does not match the original database")
+            }
+            
+            // rename(2) atomically replaces the plaintext file with the encrypted one.
+            guard rename(tempPath, path) == 0 else {
+                throw DatabaseError(message: "Failed to replace database: \(String(cString: strerror(errno)))")
+            }
+            try? fm.removeItem(atPath: path + "-journal")
         } catch {
-            return true // Read failed (likely encrypted)
+            try? fm.removeItem(atPath: tempPath)
+            throw error
         }
     }
     
-    /// Migrates a plaintext database to an encrypted SQLCipher database by exporting to a temporary file.
-    private static func migrateToEncrypted(at path: String, passphrase: Data) throws {
-        let tempPath = path + ".tmp"
-        if FileManager.default.fileExists(atPath: tempPath) {
-            try FileManager.default.removeItem(atPath: tempPath)
+    private static func rowCounts(in queue: DatabaseQueue) throws -> [String: Int] {
+        try queue.read { db in
+            let tables = try String.fetchAll(db, sql: """
+                SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+                """)
+            var counts: [String: Int] = [:]
+            for table in tables {
+                counts[table] = try Int.fetchOne(db, sql: "SELECT count(*) FROM \(table.quotedDatabaseIdentifier)") ?? 0
+            }
+            return counts
         }
-        
-        let plaintextQueue = try DatabaseQueue(path: path)
-        try plaintextQueue.inDatabase { db in
-            // Use SQLCipher export to move data to a keyed temporary database
-            let hexPassphrase = passphrase.map { String(format: "%02hhx", $0) }.joined()
-            try db.execute(sql: "ATTACH DATABASE ? AS encrypted KEY ?", arguments: [tempPath, hexPassphrase])
-            try db.execute(sql: "SELECT sqlcipher_export('encrypted')")
-            try db.execute(sql: "DETACH DATABASE encrypted")
-        }
-        
-        // Replace old plaintext DB with the new encrypted one
-        try FileManager.default.removeItem(atPath: path)
-        try FileManager.default.moveItem(atPath: tempPath, toPath: path)
     }
     
     private var migrator: DatabaseMigrator {
@@ -148,6 +190,14 @@ public struct DatabaseManager {
         migrator.registerMigration("v6") { db in
             try db.alter(table: "host") { t in
                 t.add(column: "lastConnectedAt", .datetime)
+            }
+        }
+
+        // Vault-wide settings, e.g. which field encryption format the rows use.
+        migrator.registerMigration("v7") { db in
+            try db.create(table: "vaultInfo") { t in
+                t.column("key", .text).primaryKey()
+                t.column("value", .text).notNull()
             }
         }
 

@@ -2,6 +2,7 @@ import Foundation
 import NIOCore
 import NIOSSH
 import Crypto
+import Citadel
 
 // MARK: - Fingerprint
 
@@ -49,5 +50,66 @@ public final class CapturingHostKeyValidator: NIOSSHClientServerAuthenticationDe
     ) {
         lock.withLock { _capturedKey = hostKey }
         validationCompletePromise.succeed(())
+    }
+}
+
+// MARK: - Validator selection (fail closed)
+
+public enum HostKeyTrustError: LocalizedError {
+    case noRepository
+    case lookupFailed(Error)
+    case unreadableStoredKey(keyType: String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .noRepository:
+            return "Host key verification is unavailable (no known-hosts store). Refusing to connect."
+        case .lookupFailed(let error):
+            return "Could not read the trusted host key record: \(error.localizedDescription). Refusing to connect."
+        case .unreadableStoredKey(let keyType):
+            return "The trusted \(keyType) host key on record could not be read. Refusing to connect; remove the host from Preferences → Known Hosts to trust it again."
+        }
+    }
+}
+
+public enum HostKeyTrust {
+    /// NIOSSH only parses host key types it has registered, and Citadel registers ssh-rsa
+    /// lazily inside `SSHClient.connect`. Register it up front so a stored RSA key parses
+    /// on the first connection after launch instead of looking like "no key on record".
+    private static let registerAlgorithms: Void = {
+        NIOSSHAlgorithms.register(publicKey: Insecure.RSA.PublicKey.self, signature: Insecure.RSA.Signature.self)
+    }()
+
+    /// Chooses the host key validator for a connection.
+    ///
+    /// - A stored key for `host:port` is enforced with `.trustedKeys`; a different key fails
+    ///   the handshake with `InvalidHostKey`.
+    /// - Only when the store positively reports no record does this fall back to Trust On
+    ///   First Use via `CapturingHostKeyValidator`; the caller persists the captured key.
+    /// - Anything else (no store, lookup error, unparseable stored key) throws, so the
+    ///   connection is refused rather than silently accepting any server key.
+    public static func validator(
+        for host: String,
+        port: Int,
+        repository: KnownHostRepository?
+    ) throws -> (SSHHostKeyValidator, CapturingHostKeyValidator?) {
+        _ = registerAlgorithms
+        guard let repository else { throw HostKeyTrustError.noRepository }
+
+        let record: KnownHost?
+        do {
+            record = try repository.find(hostname: host, port: port)
+        } catch {
+            throw HostKeyTrustError.lookupFailed(error)
+        }
+
+        guard let record else {
+            let capturer = CapturingHostKeyValidator()
+            return (.custom(capturer), capturer)
+        }
+        guard let storedKey = try? NIOSSHPublicKey(openSSHPublicKey: record.openSSHPublicKey) else {
+            throw HostKeyTrustError.unreadableStoredKey(keyType: record.keyType)
+        }
+        return (.trustedKeys([storedKey]), nil)
     }
 }

@@ -6,6 +6,13 @@ import SSHoeboxCore
 struct MenuBarView: View {
     @ObservedObject var viewModel: VaultViewModel
     @EnvironmentObject var sessionRegistry: TerminalSessionRegistry
+    @Environment(\.openWindow) private var openWindow
+
+    /// Brings the main window forward, reopening it if it was closed.
+    private func showMainWindow() {
+        openWindow(id: SSHoeboxApp.mainWindowID)
+        NSApp.activate(ignoringOtherApps: true)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -46,8 +53,7 @@ struct MenuBarView: View {
             if viewModel.isUnlocked {
                 // Quick actions
                 MenuBarButton(icon: "macwindow", label: "Open SSHoebox") {
-                    NSApp.activate(ignoringOtherApps: true)
-                    NSApp.windows.first?.makeKeyAndOrderFront(nil)
+                    showMainWindow()
                 }
 
                 Divider().padding(.horizontal, 8)
@@ -57,8 +63,7 @@ struct MenuBarView: View {
                 }
             } else {
                 MenuBarButton(icon: "macwindow", label: "Unlock Vault…") {
-                    NSApp.activate(ignoringOtherApps: true)
-                    NSApp.windows.first?.makeKeyAndOrderFront(nil)
+                    showMainWindow()
                 }
             }
 

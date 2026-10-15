@@ -69,6 +69,8 @@ public class SFTPSessionManager: ObservableObject {
 
     private var sshClient: SSHClient?
     private var sftpClient: SFTPClient?
+    /// Bumped by `disconnect()` so a connect still in flight knows to close what it opened.
+    private var generation = 0
 
     /// Set before calling connect to enable TOFU host key validation.
     public var knownHostRepository: KnownHostRepository?
@@ -91,6 +93,7 @@ public class SFTPSessionManager: ObservableObject {
     // MARK: - Connect (PEM key — Ed25519 only for SFTP)
 
     public func connect(host: String, port: Int, username: String, pemKey: String, passphrase: String? = nil) async {
+        let pemKey = SSHKeyParser.normalizedPEM(pemKey)
         let decryptionKey = passphrase.flatMap { $0.data(using: .utf8) }
 
         if let edKey = try? Curve25519.Signing.PrivateKey(sshEd25519: pemKey, decryptionKey: decryptionKey) {
@@ -127,22 +130,34 @@ public class SFTPSessionManager: ObservableObject {
         port: Int,
         configure: (SSHClientSettings) -> SSHClientSettings
     ) async {
+        let gen = generation
         connectionState = .connecting
         isLoading = true
         errorMessage = nil
 
-        let (validator, capturer) = buildValidator(for: host, port: port)
+        let validator: SSHHostKeyValidator
+        let capturer: CapturingHostKeyValidator?
+        do {
+            (validator, capturer) = try HostKeyTrust.validator(for: host, port: port, repository: knownHostRepository)
+        } catch {
+            connectionState = .failed(error.localizedDescription)
+            errorMessage = error.localizedDescription
+            isLoading = false
+            return
+        }
         var settings = SSHClientSettings(
             host: host,
             port: port,
             authenticationMethod: { .passwordBased(username: "", password: "") },
             hostKeyValidator: validator
         )
-        settings.algorithms = .all
+        settings.algorithms = SSHAlgorithmPolicy.algorithms
         settings = configure(settings)
 
+        var openedClient: SSHClient?
         do {
             let client = try await SSHClient.connect(to: settings)
+            openedClient = client
 
             // Persist TOFU key on first connection
             if let key = capturer?.capturedKey, let repo = knownHostRepository {
@@ -151,36 +166,41 @@ public class SFTPSessionManager: ObservableObject {
                 let keyType     = String(openSSHStr.split(separator: " ").first ?? "unknown")
                 let record = KnownHost(hostname: host, port: port, keyType: keyType,
                                        keyFingerprint: fingerprint, openSSHPublicKey: openSSHStr)
-                try? repo.save(record)
+                do {
+                    try repo.save(record)
+                } catch {
+                    // Still TOFU for this session; the key will be offered for trust again next time.
+                    print("SFTP: could not store host key for \(host):\(port): \(error)")
+                }
             }
 
             let sftp = try await client.openSFTP()
             let home = (try? await sftp.getRealPath(atPath: ".")) ?? "/"
 
+            // The browser was closed while connecting: don't keep a connection nobody owns.
+            guard generation == gen else {
+                try? await sftp.close()
+                try? await client.close()
+                return
+            }
             self.sshClient = client
             self.sftpClient = sftp
             self.connectionState = .connected
             await loadDirectory(at: home)
 
         } catch is InvalidHostKey {
+            try? await openedClient?.close()
+            guard generation == gen else { return }
             connectionState = .failed("Host key mismatch")
             errorMessage = "Host key mismatch — remove the entry from Preferences → Known Hosts and reconnect."
             isLoading = false
         } catch {
+            try? await openedClient?.close()
+            guard generation == gen else { return }
             connectionState = .failed(error.localizedDescription)
             errorMessage = error.localizedDescription
             isLoading = false
         }
-    }
-
-    private func buildValidator(for host: String, port: Int) -> (SSHHostKeyValidator, CapturingHostKeyValidator?) {
-        guard let repo = knownHostRepository else { return (.acceptAnything(), nil) }
-        if let record = try? repo.find(hostname: host, port: port),
-           let key = try? NIOSSHPublicKey(openSSHPublicKey: record.openSSHPublicKey) {
-            return (.trustedKeys([key]), nil)
-        }
-        let capturer = CapturingHostKeyValidator()
-        return (.custom(capturer), capturer)
     }
 
     // MARK: - Navigation
@@ -290,7 +310,9 @@ public class SFTPSessionManager: ObservableObject {
         let ssh  = sshClient
         sftpClient = nil
         sshClient  = nil
+        generation += 1
         connectionState = .disconnected
+        isLoading  = false
         entries    = []
         currentPath = "/"
         Task {

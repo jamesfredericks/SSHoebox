@@ -33,14 +33,8 @@ class CredentialsViewModel: ObservableObject {
     func addCredential(username: String, type: String, secret: String, isInteractive: Bool = false) {
         guard let secretData = secret.data(using: .utf8) else { return }
         
-        // Encrypt username
-        guard let encryptedUsername = try? CryptoManager.encryptString(username, using: vaultKey) else {
-            errorMessage = "Failed to encrypt username."
-            return
-        }
-        
         do {
-            _ = try repository.createCredential(hostId: hostId, username: encryptedUsername, type: type, secret: secretData, vaultKey: vaultKey, isInteractive: isInteractive)
+            _ = try repository.createCredential(hostId: hostId, username: username, type: type, secret: secretData, vaultKey: vaultKey, isInteractive: isInteractive)
             fetchCredentials()
         } catch {
             errorMessage = "Failed to add credential: \(error.localizedDescription)"
@@ -55,12 +49,6 @@ class CredentialsViewModel: ObservableObject {
 
         guard let secretData = secret.data(using: .utf8) else { return }
 
-        // Encrypt username
-        guard let encryptedUsername = try? CryptoManager.encryptString(username, using: vaultKey) else {
-            errorMessage = "Failed to encrypt username."
-            return
-        }
-
         // Archive the old secret in history before overwriting (only if it actually changed)
         if let oldSecret = try? repository.decryptSecret(for: existingCredential, vaultKey: vaultKey),
            oldSecret != secretData {
@@ -72,7 +60,7 @@ class CredentialsViewModel: ObservableObject {
             _ = try repository.updateCredential(
                 id: id,
                 hostId: hostId,
-                username: encryptedUsername,
+                username: username,
                 type: type,
                 secret: secretData,
                 vaultKey: vaultKey,

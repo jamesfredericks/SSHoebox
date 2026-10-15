@@ -26,7 +26,11 @@ struct GeneratorView: View {
                     .padding()
             }
             .padding(.horizontal)
-            
+
+            Text("~\(Int(PasswordGenerator.entropyBits(options: viewModel.options))) bits of entropy")
+                .font(.caption)
+                .foregroundStyle(DesignSystem.Colors.textSecondary)
+
             // Actions
             HStack {
                 Button(action: {
@@ -37,8 +41,7 @@ struct GeneratorView: View {
                 }
                 
                 Button(action: {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(viewModel.generatedPassword, forType: .string)
+                    viewModel.copyToClipboard()
                     copied = true
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                         copied = false

@@ -108,6 +108,9 @@ public struct SSHClientSettings: Sendable {
     public var group: EventLoopGroup = MultiThreadedEventLoopGroup.singleton
     internal var channelHandlers: [ChannelHandler & Sendable] = []
     public var connectTimeout: TimeAmount = .seconds(30)
+    /// How long authentication may take once connected. SSHoebox patch: raise it when the
+    /// user answers prompts (keyboard-interactive one-time codes) during login.
+    public var loginTimeout: TimeAmount = .seconds(10)
 
     public init(
         host: String,
@@ -169,7 +172,7 @@ final class SSHClientSession: Sendable {
     ) -> EventLoopFuture<Void> {
         let handshakeHandler = ClientHandshakeHandler(
             eventLoop: channel.eventLoop,
-            loginTimeout: .seconds(10)
+            loginTimeout: settings.loginTimeout
         )
         var clientConfiguration = SSHClientConfiguration(
             userAuthDelegate: settings.authenticationMethod(),
@@ -225,15 +228,27 @@ final class SSHClientSession: Sendable {
         .channelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
         .channelOption(ChannelOptions.socket(SocketOptionLevel(IPPROTO_TCP), TCP_NODELAY), value: 1)
         
-        return try await bootstrap.connect(host: settings.host, port: settings.port).flatMap { channel in
-            channel.pipeline.handler(type: ClientHandshakeHandler.self).flatMap { handshakeHandler in
-                handshakeHandler.authenticated
-            }.flatMap {
-                channel.pipeline.handler(type: NIOSSHHandler.self)
-            }.map { sshHandler in
-                SSHClientSession(channel: channel, inboundChannelHandler: inboundChannelHandler, sshHandler: sshHandler)
-            }
-        }.get()
+        let channel = try await bootstrap.connect(host: settings.host, port: settings.port).get()
+        let session = channel.pipeline.handler(type: ClientHandshakeHandler.self).flatMap { handshakeHandler in
+            handshakeHandler.authenticated
+        }.flatMap {
+            channel.pipeline.handler(type: NIOSSHHandler.self)
+        }.map { sshHandler in
+            SSHClientSession(channel: channel, inboundChannelHandler: inboundChannelHandler, sshHandler: sshHandler)
+        }.flatMapError { error in
+            // SSHoebox patch: the caller never receives the channel when the handshake or
+            // login fails (or times out), so close it here instead of leaving the socket open.
+            channel.close(promise: nil)
+            return channel.eventLoop.makeFailedFuture(error)
+        }
+
+        // SSHoebox patch: cancelling the connecting task abandons the handshake and closes
+        // the socket, rather than waiting for the login timeout.
+        return try await withTaskCancellationHandler {
+            try await session.get()
+        } onCancel: {
+            channel.close(promise: nil)
+        }
     }
     
     /// Creates a new SSH session on a new channel. This will connect to the given host and port.

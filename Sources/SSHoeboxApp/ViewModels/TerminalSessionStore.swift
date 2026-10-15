@@ -2,14 +2,19 @@ import Foundation
 import SwiftUI
 import SSHoeboxCore
 import CryptoKit
+import Combine
 
 /// A long-lived registry that holds one TerminalSessionStore per host.
-/// Owned as a @StateObject on MainView and injected as an @EnvironmentObject
+/// Owned as a @StateObject on SSHoeboxApp and injected as an @EnvironmentObject
 /// so session stores survive sidebar navigation, host-list refreshes, and
-/// any other view recreation throughout the app's lifetime.
+/// any other view recreation while the vault is unlocked. Every store holds the
+/// vault key, so `removeAll()` runs when the vault locks.
 @MainActor
 class TerminalSessionRegistry: ObservableObject {
     private var stores: [String: TerminalSessionStore] = [:]
+    /// Per store: republishes session connection-state changes so views showing
+    /// `totalActiveConnections` (e.g. the menu bar) stay current.
+    private var stateObservers: [String: AnyCancellable] = [:]
 
     var totalActiveConnections: Int {
         stores.values.reduce(0) { total, store in
@@ -23,12 +28,22 @@ class TerminalSessionRegistry: ObservableObject {
     }
 
     /// Returns the existing store for a host, or creates one if none exists.
+    /// An existing store picks up `host` as passed, so edits to the host apply to new sessions.
     func store(for host: SavedHost, dbManager: DatabaseManager, vaultKey: SymmetricKey) -> TerminalSessionStore {
         if let existing = stores[host.id] {
+            existing.host = host
             return existing
         }
         let newStore = TerminalSessionStore(host: host, dbManager: dbManager, vaultKey: vaultKey)
         stores[host.id] = newStore
+        stateObservers[host.id] = newStore.$sessions
+            .map { sessions in
+                Publishers.MergeMany(sessions.map { $0.manager.$connectionState.map { _ in () } })
+                    .prepend(())
+            }
+            .switchToLatest()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] in self?.objectWillChange.send() }
         return newStore
     }
 
@@ -38,6 +53,17 @@ class TerminalSessionRegistry: ObservableObject {
             store.disconnectAll()
         }
         stores.removeValue(forKey: hostId)
+        stateObservers.removeValue(forKey: hostId)
+        objectWillChange.send()
+    }
+
+    /// Ends every session and drops every store, releasing their copies of the vault key
+    /// and database handle. Called when the vault locks.
+    func removeAll() {
+        stores.values.forEach { $0.disconnectAll() }
+        stores.removeAll()
+        stateObservers.removeAll()
+        objectWillChange.send()
     }
 }
 
@@ -48,7 +74,8 @@ class TerminalSessionStore: ObservableObject {
     @Published var sessions: [TerminalSession] = []
     @Published var selectedSessionId: UUID?
 
-    private let host: SavedHost
+    /// Read at connect time, so new sessions use the latest saved address and user.
+    fileprivate(set) var host: SavedHost
     private let dbManager: DatabaseManager
     private let vaultKey: SymmetricKey
     private var credentialsViewModel: CredentialsViewModel

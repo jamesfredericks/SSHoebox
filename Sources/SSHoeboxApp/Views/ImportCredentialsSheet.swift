@@ -14,19 +14,8 @@ struct ImportCredentialsSheet: View {
     @State private var parseError: String? = nil
     @State private var importDone = false
     @State private var importedCount = 0
-    @State private var fileType: FileFormat = .unknown
 
-    enum FileFormat { case csv, bitwardenJSON, unknown }
-
-    struct ImportEntry: Identifiable {
-        let id = UUID()
-        let name: String
-        let hostname: String
-        let port: Int
-        let username: String
-        let password: String
-        let notes: String
-    }
+    typealias ImportEntry = CredentialImportEntry
 
     var body: some View {
         VStack(spacing: 0) {
@@ -82,7 +71,7 @@ struct ImportCredentialsSheet: View {
                 .foregroundStyle(DesignSystem.Colors.textPrimary)
 
             VStack(alignment: .leading, spacing: 8) {
-                formatRow(icon: "tablecells", label: "CSV", detail: "name, hostname, port, username, password")
+                formatRow(icon: "tablecells", label: "CSV", detail: "Bitwarden, 1Password, LastPass, Chrome or Firefox export, or name, hostname, port, username, password")
                 formatRow(icon: "shield", label: "Bitwarden JSON", detail: "Bitwarden export (all items)")
             }
             .padding(.horizontal, 32)
@@ -199,90 +188,27 @@ struct ImportCredentialsSheet: View {
 
     private func handleFilePick(_ result: Result<[URL], Error>) {
         guard case .success(let urls) = result, let url = urls.first else { return }
-        guard url.startAccessingSecurityScopedResource() else { return }
-        defer { url.stopAccessingSecurityScopedResource() }
+        // Not sandboxed, so the URL may not be security-scoped; read it either way
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+
+        let content: String
+        do {
+            content = try String(contentsOf: url, encoding: .utf8)
+        } catch {
+            parseError = "Failed to read file: \(error.localizedDescription)"
+            return
+        }
 
         do {
-            let content = try String(contentsOf: url, encoding: .utf8)
-            let ext = url.pathExtension.lowercased()
-
-            if ext == "json" {
-                parsedEntries = try parseBitwardenJSON(content)
-                fileType = .bitwardenJSON
-            } else {
-                parsedEntries = parseCSV(content)
-                fileType = .csv
-            }
-
+            parsedEntries = try CredentialImporter.parse(content, fileExtension: url.pathExtension)
             selected = Set(parsedEntries.map(\.id))
             if parsedEntries.isEmpty {
                 parseError = "No importable entries found in the selected file."
             }
         } catch {
-            parseError = "Failed to read file: \(error.localizedDescription)"
+            parseError = error.localizedDescription
         }
-    }
-
-    private func parseCSV(_ content: String) -> [ImportEntry] {
-        var entries: [ImportEntry] = []
-        let lines = content.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-        guard lines.count > 1 else { return [] }
-
-        for line in lines.dropFirst() { // skip header row
-            let cols = splitCSVLine(line)
-            guard cols.count >= 2 else { continue }
-            let name = cols[0]
-            let hostname = cols[1]
-            let port = cols.count > 2 ? (Int(cols[2]) ?? 22) : 22
-            let username = cols.count > 3 ? cols[3] : ""
-            let password = cols.count > 4 ? cols[4] : ""
-            entries.append(ImportEntry(name: name, hostname: hostname, port: port, username: username, password: password, notes: ""))
-        }
-        return entries
-    }
-
-    private func splitCSVLine(_ line: String) -> [String] {
-        var result: [String] = []
-        var current = ""
-        var inQuotes = false
-        for char in line {
-            if char == "\"" { inQuotes.toggle() }
-            else if char == "," && !inQuotes { result.append(current); current = "" }
-            else { current.append(char) }
-        }
-        result.append(current)
-        return result.map { $0.trimmingCharacters(in: .init(charactersIn: " \"")) }
-    }
-
-    private func parseBitwardenJSON(_ content: String) throws -> [ImportEntry] {
-        guard let data = content.data(using: .utf8),
-              let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let items = root["items"] as? [[String: Any]] else {
-            throw ImportError.invalidFormat
-        }
-
-        var entries: [ImportEntry] = []
-        for item in items {
-            guard item["type"] as? Int == 1 else { continue } // type 1 = Login
-            let name = item["name"] as? String ?? "Unnamed"
-            guard let login = item["login"] as? [String: Any] else { continue }
-            let username = login["username"] as? String ?? ""
-            let password = login["password"] as? String ?? ""
-            let uris = (login["uris"] as? [[String: Any]])?.compactMap { $0["uri"] as? String } ?? []
-            let rawURI = uris.first ?? ""
-
-            // Try to parse URI as hostname:port
-            var hostname = rawURI
-            var port = 22
-            if let url = URLComponents(string: rawURI), let host = url.host {
-                hostname = host
-                port = url.port ?? 22
-            }
-            if hostname.isEmpty { continue }
-
-            entries.append(ImportEntry(name: name, hostname: hostname, port: port, username: username, password: password, notes: ""))
-        }
-        return entries
     }
 
     private func performImport() {
@@ -300,9 +226,5 @@ struct ImportCredentialsSheet: View {
         }
         importedCount = toImport.count
         importDone = true
-    }
-
-    enum ImportError: Error {
-        case invalidFormat
     }
 }

@@ -11,6 +11,8 @@ public final class SSHAuthenticationMethod: NIOSSHClientUserAuthenticationDelega
     
     private let allImplementations: [Implementation]
     private var implementations: [Implementation]
+    /// The implementation whose offer is in flight; it answers any keyboard-interactive prompts.
+    private var currentImplementation: Implementation?
     
     internal init(
         username: String,
@@ -83,12 +85,20 @@ public final class SSHAuthenticationMethod: NIOSSHClientUserAuthenticationDelega
         availableMethods: NIOSSHAvailableUserAuthenticationMethods,
         nextChallengePromise: EventLoopPromise<NIOSSHUserAuthenticationOffer?>
     ) {
+        // SSHoebox patch: a custom delegate may make several offers (probe with `none`, then
+        // keyboard-interactive, ...) and fails the promise itself once it has run out.
+        if case .custom(let implementation)? = currentImplementation {
+            implementation.nextAuthenticationType(availableMethods: availableMethods, nextChallengePromise: nextChallengePromise)
+            return
+        }
+
         if implementations.isEmpty {
             nextChallengePromise.fail(SSHClientError.allAuthenticationOptionsFailed)
             return
         }
         
         let implementation = implementations.removeFirst()
+        currentImplementation = implementation
 
         switch implementation {
         case .user(let username, offer: let offer):
@@ -108,6 +118,10 @@ public final class SSHAuthenticationMethod: NIOSSHClientUserAuthenticationDelega
                     nextChallengePromise.fail(SSHClientError.unsupportedPrivateKeyAuthentication)
                     return
                 }
+            case .keyboardInteractive:
+                // Not checked: the first round is offered before the server lists its methods,
+                // and NIOSSH leaves keyboard-interactive out of the `.all` it starts with.
+                ()
             case .none:
                 ()
             }
@@ -115,6 +129,19 @@ public final class SSHAuthenticationMethod: NIOSSHClientUserAuthenticationDelega
             nextChallengePromise.succeed(NIOSSHUserAuthenticationOffer(username: username, serviceName: "ssh-connection", offer: offer))
         case .custom(let implementation):
             implementation.nextAuthenticationType(availableMethods: availableMethods, nextChallengePromise: nextChallengePromise)
+        }
+    }
+
+    public func respondToKeyboardInteractiveChallenge(
+        _ challenge: NIOSSHKeyboardInteractiveChallenge,
+        responsePromise: EventLoopPromise<[String]>
+    ) {
+        switch currentImplementation {
+        case .custom(let implementation):
+            implementation.respondToKeyboardInteractiveChallenge(challenge, responsePromise: responsePromise)
+        case .user, .none:
+            // A plain offer has nothing to answer prompts with.
+            responsePromise.fail(SSHClientError.allAuthenticationOptionsFailed)
         }
     }
 }
