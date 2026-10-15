@@ -26,3 +26,6 @@ dist/
 # Project-local docs not for version control
 Identity.md
 CLAUDE.md
+
+# Claude Code local settings and agent worktrees
+.claude/
