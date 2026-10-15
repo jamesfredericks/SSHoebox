@@ -9,8 +9,9 @@ public final class AES128CTR: NIOSSHTransportProtection {
         case sha1, sha256, sha512
     }
     
+    // SSHoebox patch: don't offer hmac-sha1. NIOSSH pools every scheme's MAC names into one
+    // list, so listing it here would also advertise it for every other cipher.
     public static let macNames = [
-        "hmac-sha1",
         "hmac-sha2-256",
         "hmac-sha2-512"
     ]

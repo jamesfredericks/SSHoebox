@@ -36,7 +36,9 @@ public class SSHSessionManager: ObservableObject {
     // We need to keep a reference to the channel handler or channel to write stdin
     private var stdinWriter: TTYStdinWriter?
     private var logBuffer: [Data] = []
-    private var currentTerminalSize: (cols: Int, rows: Int) = (80, 24)
+    /// The latest size reported by the terminal view, or nil before the first report. The view
+    /// usually reports its size while the connection is still being set up.
+    private var reportedTerminalSize: (cols: Int, rows: Int)?
 
     // A keyboard-interactive prompt waiting for the user's answer. While one is open, keystrokes
     // go to it rather than to the shell, which doesn't exist until login completes.
@@ -98,7 +100,7 @@ public class SSHSessionManager: ObservableObject {
             authenticationMethod: { .ed25519(username: username, privateKey: ed25519Key) },
             hostKeyValidator: validator
         )
-        settings.algorithms = .all
+        settings.algorithms = SSHAlgorithmPolicy.algorithms
         await startSession(terminalSize: terminalSize, capturer: capturer) { _ in settings }
     }
 
@@ -112,6 +114,7 @@ public class SSHSessionManager: ObservableObject {
         passphrase: String? = nil,
         terminalSize: (cols: Int, rows: Int) = (80, 24)
     ) async {
+        let pemKey = SSHKeyParser.normalizedPEM(pemKey)
         let decryptionKey = passphrase.flatMap { $0.data(using: .utf8) }
 
         if let ed25519Key = try? Curve25519.Signing.PrivateKey(sshEd25519: pemKey, decryptionKey: decryptionKey) {
@@ -178,7 +181,7 @@ public class SSHSessionManager: ObservableObject {
             },
             hostKeyValidator: validator
         )
-        settings.algorithms = .all
+        settings.algorithms = SSHAlgorithmPolicy.algorithms
         // Leave time to type a one-time code; the server's own LoginGraceTime still applies.
         settings.loginTimeout = .seconds(180)
         return settings
@@ -317,20 +320,19 @@ public class SSHSessionManager: ObservableObject {
                     self.log("TCP Connected & Authenticated.", color: "32")
                 }
                 
-                await MainActor.run { self.currentTerminalSize = terminalSize }
-                
-                // Open an interactive shell session using PTY
+                // Request the PTY at the size the view last reported, falling back to the caller's
+                // size if the view hasn't laid out yet.
+                let requestedSize = self.reportedTerminalSize ?? terminalSize
                 let ptyRequest = SSHChannelRequestEvent.PseudoTerminalRequest(
                     wantReply: true,
                     term: "xterm-256color",
-                    terminalCharacterWidth: terminalSize.cols,
-                    terminalRowHeight: terminalSize.rows,
+                    terminalCharacterWidth: requestedSize.cols,
+                    terminalRowHeight: requestedSize.rows,
                     terminalPixelWidth: 0,
                     terminalPixelHeight: 0,
                     terminalModes: .init([:])
                 )
-                
-                
+
                 try await sshClient.withPTY(ptyRequest) { inbound, outbound in
                     guard await MainActor.run(body: { self.generation == gen }) else { return }
                     await MainActor.run {
@@ -340,12 +342,10 @@ public class SSHSessionManager: ObservableObject {
                         self.onConnected?()
                     }
 
-                    // Sync the actual terminal size with the server immediately after the PTY is
-                    // granted. sizeChanged fires before the connection is established, so the
-                    // initial resize call is silently dropped (stdinWriter was nil at that point).
-                    // Re-sending now keeps the server in sync with the view's real dimensions.
-                    let actualSize = await MainActor.run { self.currentTerminalSize }
-                    if actualSize.cols != terminalSize.cols || actualSize.rows != terminalSize.rows {
+                    // resize() only forwards sizes once stdinWriter is set, so a resize that arrived
+                    // between the PTY request and now was recorded but not sent. Send it now.
+                    if let actualSize = await MainActor.run(body: { self.reportedTerminalSize }),
+                       actualSize.cols != requestedSize.cols || actualSize.rows != requestedSize.rows {
                         try? await outbound.changeSize(
                             cols: actualSize.cols,
                             rows: actualSize.rows,
@@ -448,7 +448,7 @@ public class SSHSessionManager: ObservableObject {
     /// Guards against zero/negative values that crash Citadel's WindowChangeRequest.
     public func resize(cols: Int, rows: Int) {
         guard cols > 0, rows > 0 else { return }
-        currentTerminalSize = (cols, rows)
+        reportedTerminalSize = (cols, rows)
         
         guard let writer = stdinWriter else { return }
         Task {
