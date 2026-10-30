@@ -2,7 +2,7 @@ import Foundation
 import GRDB
 import CryptoKit
 
-public struct PasswordHistory: Codable, Identifiable, FetchableRecord, PersistableRecord {
+public struct PasswordHistory: Codable, Equatable, Identifiable, FetchableRecord, PersistableRecord {
     public static let databaseTableName = "passwordHistory"
 
     public let id: String

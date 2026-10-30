@@ -201,6 +201,35 @@ public struct DatabaseManager {
             }
         }
 
+        // Sync (see VaultSyncEngine): groups get an edit timestamp like hosts and credentials,
+        // and every deletion leaves a tombstone so other Macs delete the record too. Triggers
+        // record them, which also covers rows removed by ON DELETE CASCADE.
+        migrator.registerMigration("v8") { db in
+            try db.alter(table: "hostGroup") { t in
+                t.add(column: "updatedAt", .datetime).notNull().defaults(to: "1970-01-01 00:00:00.000")
+            }
+            try db.execute(sql: "UPDATE hostGroup SET updatedAt = createdAt")
+
+            try db.create(table: "syncTombstone") { t in
+                t.column("tableName", .text).notNull()
+                t.column("recordId", .text).notNull()
+                t.column("deletedAt", .datetime).notNull()
+                t.primaryKey(["tableName", "recordId"])
+            }
+            for table in ["hostGroup", "host", "credential", "knownHost", "passwordHistory"] {
+                // strftime matches GRDB's date storage format ("yyyy-MM-dd HH:mm:ss.SSS", UTC).
+                try db.execute(sql: """
+                    CREATE TRIGGER \(table)_syncTombstone AFTER DELETE ON \(table) BEGIN
+                        INSERT OR REPLACE INTO syncTombstone (tableName, recordId, deletedAt)
+                        VALUES ('\(table)', OLD.id, strftime('%Y-%m-%d %H:%M:%f', 'now'));
+                    END;
+                    CREATE TRIGGER \(table)_syncRevive AFTER INSERT ON \(table) BEGIN
+                        DELETE FROM syncTombstone WHERE tableName = '\(table)' AND recordId = NEW.id;
+                    END
+                    """)
+            }
+        }
+
         return migrator
     }
 }

@@ -29,8 +29,9 @@ public struct GroupRepository {
     /// Persist new sort order for all groups after a drag-reorder.
     public func reorder(_ groups: [HostGroup]) throws {
         try dbManager.dbWriter.write { db in
-            for (index, var group) in groups.enumerated() {
+            for (index, var group) in groups.enumerated() where group.sortOrder != index {
                 group.sortOrder = index
+                group.updatedAt = Date()
                 try group.save(db)
             }
         }

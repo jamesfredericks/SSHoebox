@@ -214,6 +214,9 @@ struct BackupView: View {
     private func restoreConfirmMessage(for pending: VaultViewModel.PendingRestore) -> String {
         let date = pending.backup.timestamp.formatted(date: .abbreviated, time: .shortened)
         var message = "This replaces every host and credential in the current vault with the backup from \(date). Anything added since will be lost. The vault locks, and you then unlock it with the password that was in use when the backup was made."
+        if vaultViewModel.sync.isEnabled {
+            message += "\n\nSync is on, so the backup also replaces the vault on your other Macs when they next sync."
+        }
         if pending.isUnauthenticated {
             message += "\n\nThis backup was made by an older version of SSHoebox, so it can't be checked for tampering. Only restore it if you're sure where it came from."
         }

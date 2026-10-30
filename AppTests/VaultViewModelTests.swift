@@ -20,7 +20,16 @@ final class VaultViewModelTests: XCTestCase {
 
     override func tearDown() async throws {
         UserDefaults.standard.removeObject(forKey: "vaultDirectoryRaw")
+        Self.forgetSyncState()
         try? FileManager.default.removeItem(at: vaultDir)
+    }
+
+    /// What a second Mac wouldn't have: this Mac's sync folder, device ID and settings history.
+    private static func forgetSyncState() {
+        for key in [SyncController.folderKey, SyncController.deviceIDKey,
+                    SyncController.settingStampsKey, SyncController.newEpochPendingKey] {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
     }
 
     private var metadataURL: URL { vaultDir.appendingPathComponent("vault_metadata.json") }
@@ -211,5 +220,78 @@ final class VaultViewModelTests: XCTestCase {
             XCTFail("The current vault's password must not authenticate another vault's backup")
         } catch {}
         try await second.authenticateRestore(pending, password: password)
+    }
+
+    // MARK: - Sync
+
+    /// Waits for the sync passes started by unlocking or choosing a folder to finish.
+    private func settleSync(_ viewModel: VaultViewModel, file: StaticString = #filePath, line: UInt = #line) async throws {
+        for _ in 0..<250 {
+            try await Task.sleep(nanoseconds: 20_000_000)
+            if !viewModel.sync.isSyncing && viewModel.sync.lastSyncedAt != nil { break }
+        }
+        // Let a follow-up pass start and finish, too.
+        try await Task.sleep(nanoseconds: 200_000_000)
+        for _ in 0..<250 where viewModel.sync.isSyncing {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTAssertNotNil(viewModel.sync.lastSyncedAt, viewModel.sync.lastError ?? "Sync didn't run", file: file, line: line)
+        XCTAssertNil(viewModel.sync.lastError, file: file, line: line)
+    }
+
+    func testAnotherMacCanJoinASyncedVault() async throws {
+        let syncDir = vaultDir.appendingPathComponent("Cloud")
+        let secondVaultDir = vaultDir.appendingPathComponent("SecondMac")
+        try FileManager.default.createDirectory(at: syncDir, withIntermediateDirectories: true)
+
+        // First Mac: a vault with a host and a changed setting, synced to the folder
+        let first = try await makeVault()
+        let (db, key) = try XCTUnwrap(first.getDependencies())
+        let host = try SavedHost.encrypted(name: "web", hostname: "web.example.com", port: 22,
+                                           protocolType: "ssh", user: "deploy", groupId: nil, using: key)
+        try HostRepository(dbManager: db).save(host)
+        UserDefaults.standard.set(true, forKey: "terminalAllowOSC52")
+        try first.startSyncing(at: syncDir)
+        try await settleSync(first)
+        first.lock()
+
+        // Second Mac: no vault, no sync state, default settings
+        UserDefaults.standard.set(secondVaultDir.path, forKey: "vaultDirectoryRaw")
+        Self.forgetSyncState()
+        UserDefaults.standard.removeObject(forKey: "terminalAllowOSC52")
+        let second = VaultViewModel()
+        XCTAssertTrue(second.isNewUser)
+
+        try second.joinSyncedVault(at: syncDir)
+        XCTAssertFalse(second.isNewUser, "Joined vault should ask for its password, not offer to create one")
+        XCTAssertEqual(second.vaultID, first.vaultID)
+
+        second.unlock(password: password)
+        try await settle(second)
+        XCTAssertTrue(second.isUnlocked, second.errorMessage ?? "")
+        try await settleSync(second)
+
+        let synced = try XCTUnwrap(HostRepository(dbManager: XCTUnwrap(second.dbManager)).get(id: host.id))
+        XCTAssertEqual(synced.decryptedHostname(using: key), "web.example.com")
+        XCTAssertTrue(UserDefaults.standard.bool(forKey: "terminalAllowOSC52"), "Synced setting should be applied")
+        XCTAssertEqual(second.sync.otherDevices.count, 1)
+        UserDefaults.standard.removeObject(forKey: "terminalAllowOSC52")
+    }
+
+    func testJoiningRefusesAFolderWithoutASyncedVault() async throws {
+        let viewModel = VaultViewModel()
+        XCTAssertThrowsError(try viewModel.joinSyncedVault(at: vaultDir.appendingPathComponent("Empty"))) { error in
+            guard case SyncSetupError.notASyncFolder = error else { return XCTFail("\(error)") }
+        }
+        XCTAssertTrue(viewModel.isNewUser)
+        XCTAssertFalse(viewModel.sync.isEnabled)
+    }
+
+    func testSyncFolderCannotBeTheVaultFolder() async throws {
+        let viewModel = try await makeVault()
+        XCTAssertThrowsError(try viewModel.startSyncing(at: vaultDir)) { error in
+            guard case SyncSetupError.vaultFolder = error else { return XCTFail("\(error)") }
+        }
+        XCTAssertFalse(viewModel.sync.isEnabled)
     }
 }

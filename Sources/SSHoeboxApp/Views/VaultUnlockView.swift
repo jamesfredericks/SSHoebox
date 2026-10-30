@@ -79,6 +79,14 @@ struct VaultUnlockView: View {
                         .tint(DesignSystem.Colors.accent)
                     }
                     
+                    if viewModel.isNewUser && !viewModel.hasOrphanedDatabase {
+                        Button("Join a Synced Vault…") {
+                            joinSyncedVault()
+                        }
+                        .buttonStyle(.bordered)
+                        .help("Use the vault you sync from another Mac")
+                    }
+                    
                     // Recovery option — shown on unlock screen, or when an orphaned vault.db blocks creation
                     if !viewModel.isNewUser || viewModel.hasOrphanedDatabase {
                         Button("Create New Vault…") {
@@ -114,6 +122,24 @@ struct VaultUnlockView: View {
             }
         } message: {
             Text("This will permanently delete your existing vault and all stored hosts and credentials. This cannot be undone.")
+        }
+    }
+    
+    private func joinSyncedVault() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.prompt = "Join"
+        panel.message = "Choose the sync folder you chose in Preferences on your other Mac."
+        
+        if panel.runModal() == .OK, let url = panel.url {
+            do {
+                try viewModel.joinSyncedVault(at: url)
+                password = ""
+                confirmPassword = ""
+            } catch {
+                viewModel.errorMessage = "Couldn't join the synced vault: \(error.localizedDescription)"
+            }
         }
     }
     
