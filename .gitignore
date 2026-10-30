@@ -12,7 +12,6 @@ DerivedData/
 # Swift Package Manager
 .build/
 Packages/
-Package.resolved
 
 # Xcode + SwiftPM integration artifacts (sometimes appear)
 *.xcodeproj/project.xcworkspace/
@@ -27,3 +26,6 @@ dist/
 # Project-local docs not for version control
 Identity.md
 CLAUDE.md
+
+# Claude Code local settings and agent worktrees
+.claude/

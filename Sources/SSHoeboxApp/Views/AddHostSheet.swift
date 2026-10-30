@@ -14,8 +14,14 @@ struct AddHostSheet: View {
     // New Credential Fields
     @State private var credentialType = "none" // none, password, key
     @State private var password = ""
-    @State private var keyPath = ""
+    @State private var keyText = ""
+    @State private var keyError: String?
     @State private var isFileImporterPresented = false
+
+    /// The stored secret is the key itself, so only accept something that looks like one.
+    private var keyLooksValid: Bool {
+        keyText.contains("-----BEGIN") && keyText.contains("PRIVATE KEY-----")
+    }
     
     var body: some View {
         NavigationStack {
@@ -60,13 +66,22 @@ struct AddHostSheet: View {
                     if credentialType == "password" {
                         SecureField("Password", text: $password)
                     } else if credentialType == "key" {
-                        HStack {
-                            TextField("Path to Private Key", text: $keyPath)
-                            Button {
-                                isFileImporterPresented = true
-                            } label: {
-                                Image(systemName: "folder")
-                            }
+                        TextEditor(text: $keyText)
+                            .font(.system(.caption, design: .monospaced))
+                            .frame(minHeight: 100)
+                            .autocorrectionDisabled()
+                            .onChange(of: keyText) { keyError = nil }
+                        Button("Load from File…") {
+                            isFileImporterPresented = true
+                        }
+                        if let keyError {
+                            Text(keyError)
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                        } else if !keyText.isEmpty && !keyLooksValid {
+                            Text("This doesn't look like a private key. Paste the contents of the private key file (not the .pub file).")
+                                .font(.caption)
+                                .foregroundStyle(.red)
                         }
                     }
                 }
@@ -88,23 +103,40 @@ struct AddHostSheet: View {
                                 user: user,
                                 groupId: selectedGroupId,
                                 credentialType: credentialType,
-                                credentialSecret: credentialType == "password" ? password : keyPath
+                                credentialSecret: credentialType == "password" ? password : keyText
                             )
                             dismiss()
                         }
                     }
-                    .disabled(name.isEmpty || hostname.isEmpty)
+                    .disabled(name.isEmpty || hostname.isEmpty || (credentialType == "key" && !keyText.isEmpty && !keyLooksValid))
                 }
             }
             .fileImporter(isPresented: $isFileImporterPresented, allowedContentTypes: [.item]) { result in
                 switch result {
                 case .success(let url):
-                    keyPath = url.path
+                    loadKey(from: url)
                 case .failure(let error):
-                    print("Error selecting key: \(error.localizedDescription)")
+                    keyError = "Could not open the file: \(error.localizedDescription)"
                 }
             }
         }
         .frame(minWidth: 400, minHeight: 500)
+    }
+
+    /// Reads the private key's contents into the editor; the vault stores the key, not its path.
+    private func loadKey(from url: URL) {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        do {
+            let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+            guard size <= 64 * 1024 else {
+                keyError = "That file is too large to be a private key."
+                return
+            }
+            keyText = try String(contentsOf: url, encoding: .utf8)
+            keyError = nil
+        } catch {
+            keyError = "Could not read the key file: \(error.localizedDescription)"
+        }
     }
 }

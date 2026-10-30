@@ -3,8 +3,10 @@ import SSHoeboxCore
 import CryptoKit
 
 /// A tab-based terminal container shown inside HostDetailView.
-/// Sessions are owned by TerminalSessionStore (a @StateObject on HostDetailView)
+/// Sessions are owned by TerminalSessionStore (held by TerminalSessionRegistry)
 /// so they survive tab switches and other view updates.
+/// This view never opens a session by itself: HostDetailView keeps it rendered
+/// while hidden, so connecting is left to an explicit user action.
 struct TerminalTabView: View {
     @ObservedObject var store: TerminalSessionStore
     @ObservedObject var themeManager = ThemeManager.shared
@@ -37,12 +39,6 @@ struct TerminalTabView: View {
                         }
                     }
                 }
-            }
-        }
-        .onAppear {
-            // Auto-open first session only if none exist yet
-            if store.sessions.isEmpty {
-                store.openNewSession()
             }
         }
     }

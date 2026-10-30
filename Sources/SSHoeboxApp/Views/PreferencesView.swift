@@ -5,6 +5,8 @@ struct PreferencesView: View {
     @ObservedObject var viewModel: VaultViewModel
     @ObservedObject var themeManager = ThemeManager.shared
     @State private var autoLockTimeout: Int = 15
+    @AppStorage(VaultViewModel.deferAutoLockForSessionsKey) private var deferAutoLockForSessions = false
+    @AppStorage("terminalAllowOSC52") private var allowOSC52 = false
     @State private var clipboardClearTimeout: Int = 30
     @State private var isBiometricEnabled: Bool = false
     @State private var showBiometricVaultLockedAlert: Bool = false
@@ -30,7 +32,11 @@ struct PreferencesView: View {
                 .onChange(of: autoLockTimeout) { newValue in
                     UserDefaults.standard.set(newValue, forKey: "autoLockTimeout")
                     UserDefaults.standard.set(true, forKey: "hasSetAutoLockTimeout")
+                    viewModel.autoLockTimeoutDidChange()
                 }
+
+                Toggle("Stay unlocked while terminal sessions are connected", isOn: $deferAutoLockForSessions)
+                    .disabled(autoLockTimeout == 0)
 
                 Picker("Clear clipboard after", selection: $clipboardClearTimeout) {
                     Text("15 seconds").tag(15)
@@ -43,11 +49,13 @@ struct PreferencesView: View {
                     UserDefaults.standard.set(newValue, forKey: "clipboardClearTimeout")
                     ClipboardManager.shared.clipboardClearTimeout = newValue
                 }
+
+                Toggle("Let servers write to the clipboard (OSC 52)", isOn: $allowOSC52)
             } header: {
                 Text("Security")
                     .foregroundStyle(DesignSystem.Colors.textSecondary)
             } footer: {
-                Text("Automatically lock the vault after a period of inactivity. Copied secrets are cleared from the clipboard after the configured delay.")
+                Text("Automatically lock the vault after a period of inactivity; locking ends open terminal sessions. Copied secrets are cleared from the clipboard after the configured delay. Leave OSC 52 off unless you trust every server you connect to: it lets a remote program replace your clipboard.")
                     .foregroundStyle(DesignSystem.Colors.textSecondary)
             }
             
@@ -132,19 +140,22 @@ struct PreferencesView: View {
                             .foregroundStyle(DesignSystem.Colors.textPrimary)
                     }
                     .onChange(of: isBiometricEnabled) { enabled in
+                        // Only act on a real change: loading the current state in onAppear
+                        // must not re-run enrollment (and its keychain write) every time.
+                        guard enabled != viewModel.isBiometricEnrolled else { return }
                         if enabled {
                             // Re-enroll using the current vault key (requires vault to be unlocked)
                             if viewModel.vaultKey != nil {
                                 viewModel.enrollBiometrics()
                                 // Sync toggle back if enrollment failed
-                                isBiometricEnabled = BiometricAuthManager.isBiometricEnrolled
+                                isBiometricEnabled = viewModel.isBiometricEnrolled
                             } else {
                                 // Vault is locked — can't enroll without the key
                                 isBiometricEnabled = false
                                 showBiometricVaultLockedAlert = true
                             }
                         } else {
-                            BiometricAuthManager.revokeBiometric()
+                            viewModel.disableBiometrics()
                         }
                     }
                 } header: {
@@ -295,10 +306,9 @@ struct PreferencesView: View {
             } else {
                 autoLockTimeout = saved
             }
-            let savedClipboard = UserDefaults.standard.integer(forKey: "clipboardClearTimeout")
-            clipboardClearTimeout = savedClipboard == 0 ? 30 : savedClipboard
+            clipboardClearTimeout = ClipboardManager.savedClearTimeout
             // Read biometric state fresh from the source of truth
-            isBiometricEnabled = BiometricAuthManager.isBiometricEnrolled
+            isBiometricEnabled = viewModel.isBiometricEnrolled
             loadKnownHosts()
         }
         .alert("Remove Trusted Key?", isPresented: $showDeleteKnownHostAlert, presenting: knownHostToDelete) { host in

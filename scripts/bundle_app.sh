@@ -154,8 +154,12 @@ xattr -cr "${APP_BUNDLE}" 2>/dev/null || true
 
 # 9. Create distributable ZIP
 echo "📦 Creating distributable ZIP..."
+# ditto keeps the framework's symlinks (zip -r follows them, which breaks the
+# embedded SQLCipher.framework) and the code signature. Start from a clean ZIP
+# so nothing from an earlier build is left inside it.
 cd "${DIST_DIR}"
-zip -r "${APP_NAME}-v${VERSION}.zip" "${APP_NAME}.app" > /dev/null
+rm -f "${APP_NAME}-v${VERSION}.zip"
+ditto -c -k --sequesterRsrc --keepParent "${APP_NAME}.app" "${APP_NAME}-v${VERSION}.zip"
 cd ..
 echo "✅ Created ${APP_NAME}-v${VERSION}.zip"
 

@@ -33,26 +33,30 @@ public struct CredentialRepository {
         }
     }
     
-    /// Helper to create a credential by encrypting the secret
+    /// Creates a credential, encrypting both the username and the secret.
+    /// - Parameter username: The plaintext username.
     public func createCredential(hostId: String, username: String, type: String, secret: Data, vaultKey: SymmetricKey, isInteractive: Bool = false) throws -> Credential {
-        let encrypted = try CryptoManager.encrypt(secret, using: vaultKey)
-        let credential = Credential(hostId: hostId, username: username, type: type, encryptedBlob: encrypted, isInteractive: isInteractive)
+        let credential = try Credential.encrypted(
+            hostId: hostId, username: username, type: type, secret: secret,
+            isInteractive: isInteractive, using: vaultKey
+        )
         try save(credential)
         return credential
     }
     
-    /// Helper to update an existing credential
+    /// Updates an existing credential, encrypting both the username and the secret.
+    /// - Parameter username: The plaintext username.
     public func updateCredential(id: String, hostId: String, username: String, type: String, secret: Data, vaultKey: SymmetricKey, isInteractive: Bool, createdAt: Date) throws -> Credential {
-        let encrypted = try CryptoManager.encrypt(secret, using: vaultKey)
-        let credential = Credential(
+        let credential = try Credential.encrypted(
             id: id,
             hostId: hostId,
             username: username,
             type: type,
-            encryptedBlob: encrypted,
+            secret: secret,
             isInteractive: isInteractive,
             createdAt: createdAt,
-            updatedAt: Date()
+            updatedAt: Date(),
+            using: vaultKey
         )
         try dbManager.dbWriter.write { db in
             try credential.update(db)
@@ -63,6 +67,6 @@ public struct CredentialRepository {
     
     /// Helper to decrypt a credential's secret
     public func decryptSecret(for credential: Credential, vaultKey: SymmetricKey) throws -> Data {
-        return try CryptoManager.decrypt(credential.encryptedBlob, using: vaultKey)
+        return try credential.decryptedSecret(using: vaultKey)
     }
 }

@@ -34,9 +34,21 @@ public struct SSHKeyParser {
     ///
     /// - Ed25519: `"ssh-ed25519" + uint32(32) + raw_public_key_bytes`
     /// - RSA:     `"ssh-rsa" + e_mpint + n_mpint`
+    /// Returns `pem` with CRLF/CR line endings converted to LF, each line trimmed and blank lines
+    /// dropped. Citadel's key parsers only strip "\n", so a key saved or pasted with Windows line
+    /// endings (or stray spaces) would otherwise fail to parse and never be recognised as encrypted.
+    public static func normalizedPEM(_ pem: String) -> String {
+        pem.replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n") + "\n"
+    }
+
     /// Returns `true` if the OpenSSH private key at `pem` is encrypted (requires a passphrase).
     public static func isEncryptedKey(_ pem: String) -> Bool {
-        var key = pem.replacingOccurrences(of: "\n", with: "")
+        var key = normalizedPEM(pem).replacingOccurrences(of: "\n", with: "")
         guard key.hasPrefix("-----BEGIN OPENSSH PRIVATE KEY-----"),
               key.hasSuffix("-----END OPENSSH PRIVATE KEY-----") else { return false }
         key.removeLast("-----END OPENSSH PRIVATE KEY-----".count)
@@ -56,6 +68,7 @@ public struct SSHKeyParser {
     }
 
     public static func publicKeyBlob(fromPEM pem: String, passphrase: String? = nil) throws -> Data {
+        let pem = normalizedPEM(pem)
         let decryptionKey = passphrase.flatMap { $0.data(using: .utf8) }
 
         // Try Ed25519 first (most common modern key type)
@@ -94,6 +107,7 @@ public struct SSHKeyParser {
     /// - `0`    (default)                  → `ssh-rsa` (SHA-1, legacy fallback)
     /// Ed25519 always uses `ssh-ed25519` regardless of flags.
     public static func sign(pem: String, data: Data, flags: UInt32 = 0, passphrase: String? = nil) throws -> Data {
+        let pem = normalizedPEM(pem)
         let decryptionKey = passphrase.flatMap { $0.data(using: .utf8) }
 
         // Ed25519 — flags are ignored; only one algorithm exists
