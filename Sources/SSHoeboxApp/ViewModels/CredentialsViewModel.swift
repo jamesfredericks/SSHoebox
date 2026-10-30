@@ -49,8 +49,10 @@ class CredentialsViewModel: ObservableObject {
 
         guard let secretData = secret.data(using: .utf8) else { return }
 
-        // Archive the old secret in history before overwriting (only if it actually changed)
-        if let oldSecret = try? repository.decryptSecret(for: existingCredential, vaultKey: vaultKey),
+        // Archive the old secret in history before overwriting (only if it actually changed).
+        // An agent credential holds a key reference, not a secret, so there's nothing to archive.
+        if existingCredential.type != SSHAgentKeyReference.credentialType,
+           let oldSecret = try? repository.decryptSecret(for: existingCredential, vaultKey: vaultKey),
            oldSecret != secretData {
             let historyRepo = PasswordHistoryRepository(dbManager: dbManager)
             try? historyRepo.add(credentialId: id, oldSecret: oldSecret, vaultKey: vaultKey)
@@ -90,6 +92,17 @@ class CredentialsViewModel: ObservableObject {
         }
     }
     
+    /// The agent and key an `agent` credential refers to.
+    func agentKey(for credential: Credential) -> SSHAgentKeyReference? {
+        guard credential.type == SSHAgentKeyReference.credentialType else { return nil }
+        do {
+            return try SSHAgentKeyReference.decode(repository.decryptSecret(for: credential, vaultKey: vaultKey))
+        } catch {
+            errorMessage = "Could not read the SSH agent key: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
     func decrypt(credential: Credential) -> String? {
         do {
             let data = try repository.decryptSecret(for: credential, vaultKey: vaultKey)

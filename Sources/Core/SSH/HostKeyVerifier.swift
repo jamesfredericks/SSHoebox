@@ -19,6 +19,11 @@ public func sshFingerprint(for key: NIOSSHPublicKey) -> String {
           let wireBytes = Data(base64Encoded: String(parts[1])) else {
         return "SHA256:(unknown)"
     }
+    return sshFingerprint(forBlob: wireBytes)
+}
+
+/// The `ssh-keygen -lf` style fingerprint of an SSH wire-format public key blob.
+public func sshFingerprint(forBlob wireBytes: Data) -> String {
     let digest = SHA256.hash(data: wireBytes)
     // OpenSSH omits trailing '=' padding in its fingerprint display
     let b64 = Data(digest).base64EncodedString()

@@ -3,6 +3,7 @@ import Citadel
 import Crypto
 import NIOSSH
 import NIOCore
+import NIOPosix
 
 // MARK: - SFTPEntry
 
@@ -71,6 +72,8 @@ public class SFTPSessionManager: ObservableObject {
     private var sftpClient: SFTPClient?
     /// Bumped by `disconnect()` so a connect still in flight knows to close what it opened.
     private var generation = 0
+    /// The event loop of an agent-key connection, which gets its own (see `connect(agentKey:)`).
+    private var ownedGroup: MultiThreadedEventLoopGroup?
 
     /// Set before calling connect to enable TOFU host key validation.
     public var knownHostRepository: KnownHostRepository?
@@ -121,6 +124,41 @@ public class SFTPSessionManager: ObservableObject {
 
         connectionState = .failed("Unsupported key type")
         errorMessage = "Only Ed25519 keys are currently supported for SFTP direct authentication."
+    }
+
+    // MARK: - Connect (external SSH agent)
+
+    /// Logs in with a key held by an external agent, which may ask the user to approve it.
+    public func connect(host: String, port: Int, username: String, agentKey: SSHAgentKeyReference) async {
+        // The check below waits on the agent; a disconnect meanwhile cancels this connect.
+        let startGeneration = generation
+        let privateKey: NIOSSHPrivateKey
+        do {
+            privateKey = try await AgentBackedKey.checkedPrivateKey(for: agentKey)
+            guard generation == startGeneration else { return }
+        } catch {
+            guard generation == startGeneration else { return }
+            connectionState = .failed(error.localizedDescription)
+            errorMessage = error.localizedDescription
+            return
+        }
+
+        // Signing blocks the event loop while the agent waits for approval, so this connection
+        // gets a loop of its own rather than stalling others on the shared one.
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        ownedGroup = group
+        await doConnect(host: host, port: port) { settings in
+            var s = settings
+            s.authenticationMethod = { .custom(AgentKeyAuthenticator(username: username, privateKey: privateKey)) }
+            s.group = group
+            s.loginTimeout = AgentBackedKey.loginTimeout
+            return s
+        }
+        // Failed or cancelled: nothing runs on the loop any more.
+        if sshClient == nil, ownedGroup === group {
+            ownedGroup = nil
+            Task.detached { try? await group.shutdownGracefully() }
+        }
     }
 
     // MARK: - Connection core
@@ -197,8 +235,9 @@ public class SFTPSessionManager: ObservableObject {
         } catch {
             try? await openedClient?.close()
             guard generation == gen else { return }
-            connectionState = .failed(error.localizedDescription)
-            errorMessage = error.localizedDescription
+            let message = (error as? SSHAgentClientError)?.localizedDescription ?? error.localizedDescription
+            connectionState = .failed(message)
+            errorMessage = message
             isLoading = false
         }
     }
@@ -308,8 +347,10 @@ public class SFTPSessionManager: ObservableObject {
     public func disconnect() {
         let sftp = sftpClient
         let ssh  = sshClient
+        let group = ownedGroup
         sftpClient = nil
         sshClient  = nil
+        ownedGroup = nil
         generation += 1
         connectionState = .disconnected
         isLoading  = false
@@ -318,6 +359,7 @@ public class SFTPSessionManager: ObservableObject {
         Task {
             try? await sftp?.close()
             try? await ssh?.close()
+            try? await group?.shutdownGracefully()
         }
     }
 }

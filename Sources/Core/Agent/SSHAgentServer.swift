@@ -18,6 +18,21 @@ public class SSHAgentServer {
     private var isStopped = false
     private weak var delegate: SSHAgentDelegate?
 
+    /// Sockets currently served by any server in this process, so `SSHAgentClient` can
+    /// refuse to use SSHoebox's own agent as an external one.
+    private static let liveSocketsLock = NSLock()
+    private static var liveSockets: [SocketFileID] = []
+
+    /// Whether `path` is a socket an `SSHAgentServer` in this process is serving.
+    static func isServing(path: String) -> Bool {
+        // stat follows symlinks, so a link to our socket is caught too.
+        var info = stat()
+        guard stat(path, &info) == 0 else { return false }
+        return liveSocketsLock.withLock {
+            liveSockets.contains { $0.device == info.st_dev && $0.inode == info.st_ino }
+        }
+    }
+
     public init(socketPath: String, delegate: SSHAgentDelegate) {
         self.socketPath = socketPath
         self.delegate = delegate
@@ -72,6 +87,9 @@ public class SSHAgentServer {
             self.boundSocket = socket
             return true
         }
+        if keep {
+            Self.liveSocketsLock.withLock { Self.liveSockets.append(socket) }
+        }
         guard keep else {
             try? await channel.close()
             Self.removeSocket(at: socketPath, ifItIs: socket)
@@ -93,6 +111,9 @@ public class SSHAgentServer {
         }
         guard !wasStopped else { return }
 
+        if let socket {
+            Self.liveSocketsLock.withLock { Self.liveSockets.removeAll { $0 == socket } }
+        }
         try? await channel?.close()
         Self.removeSocket(at: socketPath, ifItIs: socket)
         try await group.shutdownGracefully()

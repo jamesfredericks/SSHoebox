@@ -314,10 +314,25 @@ struct HostDetailView: View {
                 return
             }
         }
+
+        if let agentCred = viewModel.credentials.first(where: { $0.type == SSHAgentKeyReference.credentialType }) {
+            let user = {
+                let u = agentCred.decryptedUsername(using: vaultKey)
+                return u.isEmpty ? defaultUser : u
+            }()
+            if let agentKey = viewModel.agentKey(for: agentCred) {
+                await sftpManager.connect(host: hostname, port: host.port, username: user, agentKey: agentKey)
+                return
+            }
+        }
     }
 
+    /// Copies the secret, or for an agent credential its public key (handy for authorized_keys).
     func copyPassword(for credential: Credential) {
-        guard let secret = viewModel.decrypt(credential: credential) else { return }
+        let copied = credential.type == SSHAgentKeyReference.credentialType
+            ? viewModel.agentKey(for: credential)?.publicKey
+            : viewModel.decrypt(credential: credential)
+        guard let secret = copied else { return }
         ClipboardManager.shared.copy(secret)
         copiedId = credential.id
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
@@ -327,6 +342,18 @@ struct HostDetailView: View {
 }
 
 struct CredentialCard: View {
+    static func icon(for type: String) -> String {
+        switch type {
+        case "key": return "key.fill"
+        case SSHAgentKeyReference.credentialType: return "person.badge.key.fill"
+        default: return "textformat.asterisk"
+        }
+    }
+
+    static func label(for type: String) -> String {
+        type == SSHAgentKeyReference.credentialType ? "SSH Agent" : type.capitalized
+    }
+
     let credential: Credential
     let vaultKey: SymmetricKey
     let isCopied: Bool
@@ -341,11 +368,11 @@ struct CredentialCard: View {
                     .foregroundStyle(DesignSystem.Colors.textPrimary)
                 
                 HStack(spacing: 6) {
-                    Image(systemName: credential.type == "key" ? "key.fill" : "textformat.asterisk")
+                    Image(systemName: Self.icon(for: credential.type))
                         .font(.caption2)
                         .foregroundStyle(DesignSystem.Colors.textSecondary)
                     
-                    Text(credential.type.capitalized)
+                    Text(Self.label(for: credential.type))
                         .font(DesignSystem.Typography.label())
                         .foregroundStyle(DesignSystem.Colors.textSecondary)
                 }

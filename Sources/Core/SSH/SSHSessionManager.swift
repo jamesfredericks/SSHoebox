@@ -3,6 +3,7 @@ import Citadel
 import Crypto
 import NIOSSH
 import NIOCore
+import NIOPosix
 
 /// Manages an active SSH PTY session using Citadel.
 /// Bridges Citadel's SSH channel I/O to SwiftTerm's terminal input/output.
@@ -141,6 +142,49 @@ public class SSHSessionManager: ObservableObject {
         await connectInteractive(host: host, port: port, username: username, terminalSize: terminalSize)
     }
 
+    // MARK: - Connect (External SSH Agent)
+
+    /// Logs in with a key held by an external agent (Bitwarden, 1Password, ...). The agent signs
+    /// the login, and may first ask the user to approve it in the password manager.
+    public func connect(
+        host: String,
+        port: Int = 22,
+        username: String,
+        agentKey: SSHAgentKeyReference,
+        terminalSize: (cols: Int, rows: Int) = (80, 24)
+    ) async {
+        // The check below waits on the agent; a disconnect meanwhile cancels this connect.
+        let startGeneration = generation
+        let privateKey: NIOSSHPrivateKey
+        do {
+            privateKey = try await AgentBackedKey.checkedPrivateKey(for: agentKey)
+            guard generation == startGeneration else { return }
+        } catch {
+            guard generation == startGeneration else { return }
+            log("⚠  \(error.localizedDescription)", color: "31")
+            connectionState = .failed(error.localizedDescription)
+            onDisconnect?()
+            return
+        }
+        guard let (validator, capturer) = buildValidator(for: host, port: port) else { return }
+
+        // Signing blocks the event loop while the agent waits for approval, so this connection
+        // gets a loop of its own rather than stalling every other session on the shared one.
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        var settings = SSHClientSettings(
+            host: host,
+            port: port,
+            authenticationMethod: { .custom(AgentKeyAuthenticator(username: username, privateKey: privateKey)) },
+            hostKeyValidator: validator
+        )
+        settings.algorithms = SSHAlgorithmPolicy.algorithms
+        settings.group = group
+        settings.loginTimeout = AgentBackedKey.loginTimeout
+        let keyName = agentKey.comment.isEmpty ? agentKey.fingerprint : agentKey.comment
+        log("Using \(keyName) from the SSH agent. Approve the request if your password manager asks.")
+        await startSession(terminalSize: terminalSize, capturer: capturer, ownedGroup: group) { _ in settings }
+    }
+
     // MARK: - Connect (Interactive / YubiKey)
 
     /// Logs in by keyboard-interactive with nothing stored: every prompt (password, one-time
@@ -254,6 +298,7 @@ public class SSHSessionManager: ObservableObject {
     private func startSession(
         terminalSize: (cols: Int, rows: Int),
         capturer: CapturingHostKeyValidator? = nil,
+        ownedGroup: EventLoopGroup? = nil,
         makeSettings: (_ generation: Int) -> SSHClientSettings
     ) async {
         // A reconnect replaces any previous session, so close its connection first.
@@ -411,12 +456,21 @@ public class SSHSessionManager: ObservableObject {
                 self.client = nil
                 self.stdinWriter = nil
                 await MainActor.run {
-                    let detailedError = String(describing: error)
+                    let detailedError = (error as? SSHAgentClientError)?.localizedDescription
+                        ?? String(describing: error)
                     let errorType = String(describing: type(of: error))
                     self.log("ERROR [\(errorType)]: \(detailedError)", color: "31")
                     self.connectionState = .failed(detailedError)
                     self.onDisconnect?()
                 }
+            }
+        }
+
+        // A connection with its own event loop shuts that loop down once its session is over.
+        if let ownedGroup, let sessionTask {
+            Task.detached {
+                await sessionTask.value
+                try? await ownedGroup.shutdownGracefully()
             }
         }
     }

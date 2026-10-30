@@ -186,6 +186,15 @@ class TerminalSessionStore: ObservableObject {
                 manager.log("ERROR: Decryption failed for private key.", color: "31")
                 await manager.connectInteractive(host: hostname, port: port, username: username)
             }
+        } else if let cred = credentialsViewModel.credentials.first(where: { $0.type == SSHAgentKeyReference.credentialType }) {
+            let credUser = cred.decryptedUsername(using: vaultKey)
+            let username = credUser.isEmpty ? defaultUser : credUser
+            if let agentKey = credentialsViewModel.agentKey(for: cred) {
+                await manager.connect(host: hostname, port: port, username: username, agentKey: agentKey)
+            } else {
+                manager.log("ERROR: Could not read the SSH agent key for this credential.", color: "31")
+                await manager.connectInteractive(host: hostname, port: port, username: username)
+            }
         } else {
             await manager.connectInteractive(host: hostname, port: port, username: defaultUser)
         }
