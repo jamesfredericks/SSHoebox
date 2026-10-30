@@ -29,6 +29,9 @@ class VaultViewModel: ObservableObject {
     }
     private var agentServer: SSHAgentServer?
     
+    /// Keeps the vault and settings the same on the user's other Macs.
+    let sync = SyncController()
+    
     var isBiometricAvailable: Bool { BiometricAuthManager.isBiometricAvailable() }
     var isBiometricEnrolled: Bool {
         vaultID.map { BiometricAuthManager.isBiometricEnrolled(vaultID: $0) } ?? false
@@ -76,6 +79,7 @@ class VaultViewModel: ObservableObject {
     }
     
     init() {
+        sync.applySettings = { [weak self] in self?.applySyncedSettings($0) }
         checkIfVaultExists()
     }
     
@@ -83,9 +87,11 @@ class VaultViewModel: ObservableObject {
         let dbExists = FileManager.default.fileExists(atPath: dbPath)
         let metadataExists = FileManager.default.fileExists(atPath: metadataPath)
         let keychainOK = (try? KeychainManager.read(account: "vault_metadata")) != nil
+        // Joined a synced vault: the database is created and filled on first unlock.
+        let joinedSyncedVault = !dbExists && metadataExists && sync.isEnabled
         
         // Treat as new user if there is no DB, OR if the metadata is missing from BOTH sidecar AND Keychain.
-        isNewUser = !dbExists || (!metadataExists && !keychainOK)
+        isNewUser = !(dbExists || joinedSyncedVault) || (!metadataExists && !keychainOK)
         vaultID = (try? loadMetadata())?.identifier
     }
     
@@ -112,6 +118,8 @@ class VaultViewModel: ObservableObject {
         try? FileManager.default.removeItem(atPath: metadataPath)
         try? KeychainManager.delete(account: "vault_metadata")
         if let vaultID { BiometricAuthManager.revokeBiometric(vaultID: vaultID) }
+        // The sync folder holds the old vault.
+        sync.setFolder(nil)
         self.vaultID = nil
         self.dbManager = nil
         self.vaultKey = nil
@@ -185,6 +193,10 @@ class VaultViewModel: ObservableObject {
         
         if isAgentEnabled {
             startAgent()
+        }
+        
+        if let metadata = try? currentVaultMetadata() {
+            sync.start(dbManager: manager, vaultKey: key, vaultMetadata: metadata)
         }
     }
     
@@ -333,6 +345,8 @@ class VaultViewModel: ObservableObject {
         
         // Stop agent
         stopAgent()
+        
+        sync.stop()
     }
     
     // MARK: - Auto-Lock
@@ -400,6 +414,7 @@ class VaultViewModel: ObservableObject {
         try? KeychainManager.delete(account: "vault_metadata")
         
         self.lock()
+        sync.setFolder(nil)
         self.checkIfVaultExists()
         self.errorMessage = nil
     }
@@ -447,6 +462,47 @@ class VaultViewModel: ObservableObject {
         self.lock()
         UserDefaults.standard.set(url.path, forKey: "vaultDirectoryRaw")
         checkIfVaultExists()
+    }
+    
+    // MARK: - Sync
+    
+    /// Starts syncing the open vault through a folder in iCloud Drive, Dropbox or the like.
+    func startSyncing(at folder: URL) throws {
+        try sync.enable(folder, vaultDirectory: vaultDirectoryURL)
+    }
+    
+    /// Sets up this Mac, which has no vault yet, to use the vault another Mac syncs through
+    /// `folder`. The vault's data arrives once it's unlocked with its master password.
+    func joinSyncedVault(at folder: URL) throws {
+        guard !FileManager.default.fileExists(atPath: dbPath) else { throw SyncSetupError.vaultExists }
+        let resolved = try VaultSyncEngine.resolveFolder(folder)
+        guard let synced = try VaultSyncEngine.vaultMetadata(in: resolved) else { throw SyncSetupError.notASyncFolder }
+        try synced.data.write(to: URL(fileURLWithPath: metadataPath), options: .atomic)
+        sync.setFolder(resolved)
+        checkIfVaultExists()
+        errorMessage = nil
+    }
+    
+    /// Applies settings changed on another Mac, including the side effects the Preferences
+    /// controls would have had.
+    private func applySyncedSettings(_ values: [String: SyncedValue]) {
+        for (key, value) in values where key != "isAgentEnabled" {
+            SyncedSettings.store(value, forKey: key)
+        }
+        if values["autoLockTimeout"] != nil {
+            UserDefaults.standard.set(true, forKey: "hasSetAutoLockTimeout")
+            autoLockTimeoutDidChange()
+        }
+        if values["clipboardClearTimeout"] != nil {
+            ClipboardManager.shared.clipboardClearTimeout = ClipboardManager.savedClearTimeout
+        }
+        if case .bool(let enabled)? = values["isAgentEnabled"], enabled != isAgentEnabled {
+            isAgentEnabled = enabled // starts or stops the agent
+        }
+        if values["selectedThemeId"] != nil || values["terminalFontSize"] != nil {
+            ThemeManager.shared.reloadFromDefaults()
+        }
+        NotificationCenter.default.post(name: .syncedSettingsDidChange, object: nil)
     }
     
     // MARK: - Backup
@@ -504,6 +560,10 @@ class VaultViewModel: ObservableObject {
     func restoreBackup(_ pending: PendingRestore) throws {
         lock()
         try BackupManager.install(pending.backup, databasePath: dbPath, metadataPath: metadataPath)
+        // Otherwise the next sync would merge the other Macs' newer data back in.
+        if sync.isEnabled {
+            UserDefaults.standard.set(true, forKey: SyncController.newEpochPendingKey)
+        }
         // Touch ID keys are per vault, so a restored vault with different metadata simply
         // has no enrollment until the user enables it again.
         checkIfVaultExists()

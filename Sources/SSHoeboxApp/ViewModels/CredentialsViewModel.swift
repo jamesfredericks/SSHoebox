@@ -12,6 +12,7 @@ class CredentialsViewModel: ObservableObject {
     private let repository: CredentialRepository
     private let vaultKey: SymmetricKey
     private let hostId: String
+    private var cancellables = Set<AnyCancellable>()
     
     init(dbManager: DatabaseManager, vaultKey: SymmetricKey, hostId: String) {
         self.dbManager = dbManager
@@ -19,6 +20,9 @@ class CredentialsViewModel: ObservableObject {
         self.hostId = hostId
         self.repository = CredentialRepository(dbManager: dbManager)
         fetchCredentials()
+        NotificationCenter.default.publisher(for: .vaultDidSync)
+            .sink { [weak self] _ in self?.fetchCredentials() }
+            .store(in: &cancellables)
     }
     
     func fetchCredentials() {

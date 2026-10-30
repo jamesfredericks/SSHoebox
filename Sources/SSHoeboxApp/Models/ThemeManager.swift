@@ -23,6 +23,18 @@ class ThemeManager: ObservableObject {
         self.terminalFontSize = savedSize > 0 ? CGFloat(savedSize) : 13
     }
 
+    /// Picks up values that sync stored from another Mac.
+    func reloadFromDefaults() {
+        let themeId = UserDefaults.standard.string(forKey: "selectedThemeId") ?? AppTheme.defaultTheme.id
+        if themeId != currentTheme.id {
+            setTheme(id: themeId)
+        }
+        let size = UserDefaults.standard.double(forKey: "terminalFontSize")
+        if size > 0, CGFloat(size) != terminalFontSize {
+            terminalFontSize = min(max(CGFloat(size), 8), 32)
+        }
+    }
+
     func setTheme(id: String) {
         if let theme = AppTheme.allThemes.first(where: { $0.id == id }) {
             withAnimation {

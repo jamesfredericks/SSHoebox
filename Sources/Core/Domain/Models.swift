@@ -3,28 +3,31 @@ import GRDB
 
 // MARK: - HostGroup
 
-public struct HostGroup: Codable, FetchableRecord, PersistableRecord, Identifiable {
+public struct HostGroup: Codable, Equatable, FetchableRecord, PersistableRecord, Identifiable {
     public static var databaseTableName = "hostGroup"
     
     public var id: String
     public var name: String
     public var sortOrder: Int
     public var createdAt: Date
+    public var updatedAt: Date
     
     public init(id: String = UUID().uuidString,
                 name: String,
                 sortOrder: Int = 0,
-                createdAt: Date = Date()) {
+                createdAt: Date = Date(),
+                updatedAt: Date = Date()) {
         self.id = id
         self.name = name
         self.sortOrder = sortOrder
         self.createdAt = createdAt
+        self.updatedAt = updatedAt
     }
 }
 
 // MARK: - SavedHost
 
-public struct SavedHost: Codable, FetchableRecord, PersistableRecord, Identifiable {
+public struct SavedHost: Codable, Equatable, FetchableRecord, PersistableRecord, Identifiable {
     public static var databaseTableName = "host"
 
     public var id: String
@@ -63,7 +66,7 @@ public struct SavedHost: Codable, FetchableRecord, PersistableRecord, Identifiab
 
 // MARK: - Credential
 
-public struct Credential: Codable, FetchableRecord, PersistableRecord, Identifiable {
+public struct Credential: Codable, Equatable, FetchableRecord, PersistableRecord, Identifiable {
     public static var databaseTableName = "credential"
     
     public var id: String

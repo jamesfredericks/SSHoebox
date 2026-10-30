@@ -127,9 +127,11 @@ struct PreferencesView: View {
                 Text("Vault Storage")
                     .foregroundStyle(DesignSystem.Colors.textSecondary)
             } footer: {
-                Text("Store your vault in a cloud folder (like iCloud Drive or Dropbox) to sync across your Macs.")
+                Text("To use the vault on several Macs, turn on Sync below rather than moving the vault into a cloud folder: when two Macs change the same vault file, one Mac's changes are lost.")
                     .foregroundStyle(DesignSystem.Colors.textSecondary)
             }
+            
+            SyncSettingsSection(viewModel: viewModel, sync: viewModel.sync)
             
             // Biometric unlock section — only shown if available
             if BiometricAuthManager.isBiometricAvailable() {
@@ -299,18 +301,13 @@ struct PreferencesView: View {
         .tint(DesignSystem.Colors.accent)
         .navigationTitle("Preferences")
         .onAppear {
-            // Load saved preferences
-            let saved = UserDefaults.standard.integer(forKey: "autoLockTimeout")
-            if saved == 0 && !UserDefaults.standard.bool(forKey: "hasSetAutoLockTimeout") {
-                autoLockTimeout = 15 // Default
-            } else {
-                autoLockTimeout = saved
-            }
-            clipboardClearTimeout = ClipboardManager.savedClearTimeout
+            loadSettings()
             // Read biometric state fresh from the source of truth
             isBiometricEnabled = viewModel.isBiometricEnrolled
             loadKnownHosts()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .syncedSettingsDidChange)) { _ in loadSettings() }
+        .onReceive(NotificationCenter.default.publisher(for: .vaultDidSync)) { _ in loadKnownHosts() }
         .alert("Remove Trusted Key?", isPresented: $showDeleteKnownHostAlert, presenting: knownHostToDelete) { host in
             Button("Remove", role: .destructive) {
                 deleteKnownHost(host)
@@ -332,6 +329,16 @@ struct PreferencesView: View {
         } message: {
             Text(viewModel.errorMessage ?? "")
         }
+    }
+
+    private func loadSettings() {
+        let saved = UserDefaults.standard.integer(forKey: "autoLockTimeout")
+        if saved == 0 && !UserDefaults.standard.bool(forKey: "hasSetAutoLockTimeout") {
+            autoLockTimeout = 15 // Default
+        } else {
+            autoLockTimeout = saved
+        }
+        clipboardClearTimeout = ClipboardManager.savedClearTimeout
     }
 
     private func loadKnownHosts() {

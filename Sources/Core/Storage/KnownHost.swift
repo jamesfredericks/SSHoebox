@@ -3,7 +3,7 @@ import GRDB
 
 // MARK: - Model
 
-public struct KnownHost: Codable, FetchableRecord, PersistableRecord, Identifiable {
+public struct KnownHost: Codable, Equatable, FetchableRecord, PersistableRecord, Identifiable {
     public static var databaseTableName = "knownHost"
 
     public var id: String

@@ -19,6 +19,7 @@ class HostsViewModel: ObservableObject {
     private let groupRepository: GroupRepository
     private let credentialRepository: CredentialRepository
     private let vaultKey: SymmetricKey
+    private var cancellables = Set<AnyCancellable>()
 
     init(dbManager: DatabaseManager, vaultKey: SymmetricKey) {
         self.dbManager = dbManager
@@ -28,6 +29,12 @@ class HostsViewModel: ObservableObject {
         self.vaultKey = vaultKey
         fetchGroups()
         fetchHosts()
+        NotificationCenter.default.publisher(for: .vaultDidSync)
+            .sink { [weak self] _ in
+                self?.fetchGroups()
+                self?.fetchHosts()
+            }
+            .store(in: &cancellables)
     }
 
     // MARK: - Host Fetching
@@ -192,6 +199,7 @@ class HostsViewModel: ObservableObject {
     func updateGroup(_ group: HostGroup, name: String) {
         var updated = group
         updated.name = name
+        updated.updatedAt = Date()
         do {
             try groupRepository.save(updated)
             fetchGroups()
