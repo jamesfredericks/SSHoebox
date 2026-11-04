@@ -29,9 +29,9 @@ struct LoginLogView: View {
                 lockedView
             }
         }
-        .frame(minWidth: 640, minHeight: 360)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(DesignSystem.Colors.background)
-        .navigationTitle("Login Log")
+        .navigationTitle("Logs")
     }
 
     // MARK: - Content

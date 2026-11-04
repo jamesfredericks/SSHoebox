@@ -58,6 +58,7 @@ struct SSHoeboxApp: App {
 
         Window("Login Log", id: LoginLogStore.windowID) {
             LoginLogView(viewModel: viewModel)
+                .frame(minWidth: 640, minHeight: 360)
                 .preferredColorScheme(.dark)
         }
         .defaultSize(width: 900, height: 520)

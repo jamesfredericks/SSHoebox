@@ -12,6 +12,7 @@ struct MainView: View {
         case generator
         case backups
         case preferences
+        case logs
     }
 
     var body: some View {
@@ -41,6 +42,11 @@ struct MainView: View {
                         Label("Preferences", systemImage: "gear")
                             .foregroundColor(DesignSystem.Colors.textPrimary)
                     }
+
+                    NavigationLink(value: SidebarItem.logs) {
+                        Label("Logs", systemImage: "text.magnifyingglass")
+                            .foregroundColor(DesignSystem.Colors.textPrimary)
+                    }
                 }
             }
             .listStyle(.sidebar)
@@ -63,6 +69,8 @@ struct MainView: View {
                     }
                 case .preferences:
                     PreferencesView(viewModel: viewModel)
+                case .logs:
+                    LoginLogView(viewModel: viewModel)
                 case .none:
                     Text("Select an item")
                         .foregroundStyle(DesignSystem.Colors.textSecondary)
