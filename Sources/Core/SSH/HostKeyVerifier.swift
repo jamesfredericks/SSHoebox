@@ -93,28 +93,72 @@ public enum HostKeyTrust {
     ///   First Use via `CapturingHostKeyValidator`; the caller persists the captured key.
     /// - Anything else (no store, lookup error, unparseable stored key) throws, so the
     ///   connection is refused rather than silently accepting any server key.
+    ///
+    /// With a `trace`, the trust state and the key the server presents are written to it.
     public static func validator(
         for host: String,
         port: Int,
-        repository: KnownHostRepository?
+        repository: KnownHostRepository?,
+        trace: LoginTrace? = nil
     ) throws -> (SSHHostKeyValidator, CapturingHostKeyValidator?) {
         _ = registerAlgorithms
-        guard let repository else { throw HostKeyTrustError.noRepository }
+        guard let repository else {
+            trace?.error("host key: no known-hosts store; refusing to connect")
+            throw HostKeyTrustError.noRepository
+        }
 
         let record: KnownHost?
         do {
             record = try repository.find(hostname: host, port: port)
         } catch {
+            trace?.error("host key: lookup failed (\(LoginTrace.describe(error))); refusing to connect")
             throw HostKeyTrustError.lookupFailed(error)
         }
 
-        guard let record else {
-            let capturer = CapturingHostKeyValidator()
-            return (.custom(capturer), capturer)
+        let validator: SSHHostKeyValidator
+        let capturer: CapturingHostKeyValidator?
+        if let record {
+            guard let storedKey = try? NIOSSHPublicKey(openSSHPublicKey: record.openSSHPublicKey) else {
+                trace?.error("host key: stored \(record.keyType) key can't be parsed; refusing to connect")
+                throw HostKeyTrustError.unreadableStoredKey(keyType: record.keyType)
+            }
+            trace?.info("host key: trusted key on record is \(record.keyType) \(record.keyFingerprint)")
+            (validator, capturer) = (.trustedKeys([storedKey]), nil)
+        } else {
+            trace?.info("host key: none on record; the server's key will be trusted on first use")
+            let newCapturer = CapturingHostKeyValidator()
+            (validator, capturer) = (.custom(newCapturer), newCapturer)
         }
-        guard let storedKey = try? NIOSSHPublicKey(openSSHPublicKey: record.openSSHPublicKey) else {
-            throw HostKeyTrustError.unreadableStoredKey(keyType: record.keyType)
+        guard let trace else { return (validator, capturer) }
+        return (.custom(TracingHostKeyValidator(inner: validator, trace: trace)), capturer)
+    }
+}
+
+/// Logs the key the server presents and whether it was accepted, then defers to `inner`.
+/// Citadel's `InvalidHostKey` carries no key, so this is the only place the presented
+/// fingerprint of a mismatched key can be seen.
+final class TracingHostKeyValidator: NIOSSHClientServerAuthenticationDelegate, Sendable {
+    private let inner: SSHHostKeyValidator
+    private let trace: LoginTrace
+
+    init(inner: SSHHostKeyValidator, trace: LoginTrace) {
+        self.inner = inner
+        self.trace = trace
+    }
+
+    func validateHostKey(hostKey: NIOSSHPublicKey, validationCompletePromise: EventLoopPromise<Void>) {
+        let keyType = String(String(openSSHPublicKey: hostKey).split(separator: " ").first ?? "unknown")
+        let presented = "\(keyType) \(sshFingerprint(for: hostKey))"
+        let trace = self.trace
+        trace.info("host key: server presented \(presented)")
+        validationCompletePromise.futureResult.whenComplete { result in
+            switch result {
+            case .success:
+                trace.info("host key: accepted")
+            case .failure:
+                trace.error("host key: REJECTED, \(presented) does not match the trusted key on record")
+            }
         }
-        return (.trustedKeys([storedKey]), nil)
+        inner.validateHostKey(hostKey: hostKey, validationCompletePromise: validationCompletePromise)
     }
 }

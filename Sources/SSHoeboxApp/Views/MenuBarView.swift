@@ -56,6 +56,10 @@ struct MenuBarView: View {
                     showMainWindow()
                 }
 
+                MenuBarButton(icon: "text.magnifyingglass", label: "Login Log") {
+                    OpenLoginLogAction(openWindow: openWindow)()
+                }
+
                 Divider().padding(.horizontal, 8)
 
                 MenuBarButton(icon: "lock.fill", label: "Lock Vault") {

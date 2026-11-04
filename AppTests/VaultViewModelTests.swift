@@ -80,11 +80,13 @@ final class VaultViewModelTests: XCTestCase {
         var lockHookCalls = 0
         viewModel.onLock = { lockHookCalls += 1 }
 
+        LoginLogBuffer.shared.append(level: .info, line: "[abcd1234 +0ms] SSH login to secret-host:22")
         viewModel.lock()
         XCTAssertFalse(viewModel.isUnlocked)
         XCTAssertNil(viewModel.vaultKey)
         XCTAssertNil(viewModel.dbManager)
         XCTAssertEqual(lockHookCalls, 1, "Locking must end terminal sessions")
+        XCTAssertTrue(LoginLogBuffer.shared.entries.isEmpty, "Locking must clear the in-app login log")
 
         viewModel.unlock(password: password)
         try await settle(viewModel)

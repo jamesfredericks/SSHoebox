@@ -30,6 +30,17 @@ public class SSHSessionManager: ObservableObject {
     /// Bumped whenever a session starts or is torn down. A session task compares it with the
     /// value it started with, so a superseded connection never updates this manager's state.
     private var generation = 0
+    /// Diagnostic log of the current (or last) login attempt.
+    private var trace: LoginTrace?
+
+    /// The id of the latest login attempt, for finding it in the Login Log.
+    @Published public private(set) var lastLoginAttemptID: String?
+
+    private func newTrace() -> LoginTrace {
+        let trace = LoginTrace()
+        lastLoginAttemptID = trace.id
+        return trace
+    }
     
     // Stdin pipe: we write to this continuation to send data to the SSH channel
     private var stdinContinuation: AsyncStream<Data>.Continuation?
@@ -78,10 +89,13 @@ public class SSHSessionManager: ObservableObject {
         password: String,
         terminalSize: (cols: Int, rows: Int) = (80, 24)
     ) async {
-        guard let (validator, capturer) = buildValidator(for: host, port: port) else { return }
-        await startSession(terminalSize: terminalSize, capturer: capturer) { generation in
+        let trace = newTrace()
+        trace.begin("SSH", host: host, port: port, username: username,
+                    method: "stored password (password auth, else keyboard-interactive)")
+        guard let (validator, capturer) = buildValidator(for: host, port: port, trace: trace) else { return }
+        await startSession(trace: trace, terminalSize: terminalSize, capturer: capturer) { generation in
             self.interactiveSettings(host: host, port: port, username: username, password: password,
-                                     validator: validator, generation: generation)
+                                     validator: validator, generation: generation, trace: trace)
         }
     }
 
@@ -94,7 +108,23 @@ public class SSHSessionManager: ObservableObject {
         ed25519Key: Curve25519.Signing.PrivateKey,
         terminalSize: (cols: Int, rows: Int) = (80, 24)
     ) async {
-        guard let (validator, capturer) = buildValidator(for: host, port: port) else { return }
+        let trace = newTrace()
+        trace.begin("SSH", host: host, port: port, username: username, method: "publickey")
+        await connectEd25519(host: host, port: port, username: username, ed25519Key: ed25519Key,
+                             terminalSize: terminalSize, trace: trace)
+    }
+
+    private func connectEd25519(
+        host: String,
+        port: Int,
+        username: String,
+        ed25519Key: Curve25519.Signing.PrivateKey,
+        terminalSize: (cols: Int, rows: Int),
+        trace: LoginTrace
+    ) async {
+        let fingerprint = sshFingerprint(for: NIOSSHPrivateKey(ed25519Key: ed25519Key).publicKey)
+        trace.info("key: ssh-ed25519 \(fingerprint); the server must list it in authorized_keys")
+        guard let (validator, capturer) = buildValidator(for: host, port: port, trace: trace) else { return }
         var settings = SSHClientSettings(
             host: host,
             port: port,
@@ -102,7 +132,7 @@ public class SSHSessionManager: ObservableObject {
             hostKeyValidator: validator
         )
         settings.algorithms = SSHAlgorithmPolicy.algorithms
-        await startSession(terminalSize: terminalSize, capturer: capturer) { _ in settings }
+        await startSession(trace: trace, terminalSize: terminalSize, capturer: capturer) { _ in settings }
     }
 
     // MARK: - Connect (PEM Key — parses Ed25519, falls back to interactive)
@@ -117,29 +147,41 @@ public class SSHSessionManager: ObservableObject {
     ) async {
         let pemKey = SSHKeyParser.normalizedPEM(pemKey)
         let decryptionKey = passphrase.flatMap { $0.data(using: .utf8) }
+        let trace = newTrace()
+        trace.begin("SSH", host: host, port: port, username: username,
+                    method: "stored private key" + (passphrase == nil ? "" : " with a passphrase from the user"))
+        // The armor line names the format (OPENSSH, RSA, EC, ...) and isn't secret.
+        let armor = pemKey.split(whereSeparator: \.isNewline).first.map(String.init) ?? "(empty)"
+        trace.info("key: format \(LoginTrace.quoted(armor))")
 
         if let ed25519Key = try? Curve25519.Signing.PrivateKey(sshEd25519: pemKey, decryptionKey: decryptionKey) {
             passphraseChallenge = nil
-            await connect(host: host, port: port, username: username, ed25519Key: ed25519Key, terminalSize: terminalSize)
+            await connectEd25519(host: host, port: port, username: username, ed25519Key: ed25519Key,
+                                 terminalSize: terminalSize, trace: trace)
             return
         }
 
         // Key is encrypted and no (or wrong) passphrase was provided
         if SSHKeyParser.isEncryptedKey(pemKey) {
             if passphrase == nil {
+                trace.info("key: encrypted; asking the user for its passphrase (a new attempt follows)")
                 passphraseChallenge = SSHPassphraseChallenge(
                     pemKey: pemKey, host: host, port: port,
                     username: username, terminalSize: terminalSize
                 )
             } else {
+                trace.error("key: passphrase is incorrect, or the key isn't an Ed25519 OpenSSH key")
                 log("Incorrect passphrase for private key.", color: "31")
                 connectionState = .failed("Incorrect key passphrase — please try again.")
             }
             return
         }
 
+        let fingerprint = (try? SSHKeyParser.publicKeyBlob(fromPEM: pemKey)).map(sshFingerprint(forBlob:))
+        trace.error("key: not an Ed25519 OpenSSH key\(fingerprint.map { " (\($0))" } ?? ""); only Ed25519 is "
+                    + "supported for direct login, so the key is NOT used and keyboard-interactive is tried instead")
         log("Key type not supported for direct auth — using keyboard-interactive.", color: "33")
-        await connectInteractive(host: host, port: port, username: username, terminalSize: terminalSize)
+        await connectInteractive(host: host, port: port, username: username, terminalSize: terminalSize, trace: trace)
     }
 
     // MARK: - Connect (External SSH Agent)
@@ -153,20 +195,29 @@ public class SSHSessionManager: ObservableObject {
         agentKey: SSHAgentKeyReference,
         terminalSize: (cols: Int, rows: Int) = (80, 24)
     ) async {
+        let trace = newTrace()
+        trace.begin("SSH", host: host, port: port, username: username, method: "publickey from an external SSH agent")
+        trace.info("key: \(agentKey.algorithm ?? "unknown type") \(agentKey.fingerprint) "
+                   + "\(LoginTrace.quoted(agentKey.comment)) via agent socket \(agentKey.socketPath)")
         // The check below waits on the agent; a disconnect meanwhile cancels this connect.
         let startGeneration = generation
         let privateKey: NIOSSHPrivateKey
         do {
             privateKey = try await AgentBackedKey.checkedPrivateKey(for: agentKey)
-            guard generation == startGeneration else { return }
+            guard generation == startGeneration else {
+                trace.info("cancelled while checking the agent")
+                return
+            }
+            trace.info("agent: reachable and still holds the key")
         } catch {
             guard generation == startGeneration else { return }
+            trace.error("agent: check failed: \(LoginTrace.describe(error))")
             log("⚠  \(error.localizedDescription)", color: "31")
             connectionState = .failed(error.localizedDescription)
             onDisconnect?()
             return
         }
-        guard let (validator, capturer) = buildValidator(for: host, port: port) else { return }
+        guard let (validator, capturer) = buildValidator(for: host, port: port, trace: trace) else { return }
 
         // Signing blocks the event loop while the agent waits for approval, so this connection
         // gets a loop of its own rather than stalling every other session on the shared one.
@@ -174,7 +225,9 @@ public class SSHSessionManager: ObservableObject {
         var settings = SSHClientSettings(
             host: host,
             port: port,
-            authenticationMethod: { .custom(AgentKeyAuthenticator(username: username, privateKey: privateKey)) },
+            authenticationMethod: {
+                .custom(AgentKeyAuthenticator(username: username, privateKey: privateKey, trace: trace))
+            },
             hostKeyValidator: validator
         )
         settings.algorithms = SSHAlgorithmPolicy.algorithms
@@ -182,7 +235,7 @@ public class SSHSessionManager: ObservableObject {
         settings.loginTimeout = AgentBackedKey.loginTimeout
         let keyName = agentKey.comment.isEmpty ? agentKey.fingerprint : agentKey.comment
         log("Using \(keyName) from the SSH agent. Approve the request if your password manager asks.")
-        await startSession(terminalSize: terminalSize, capturer: capturer, ownedGroup: group) { _ in settings }
+        await startSession(trace: trace, terminalSize: terminalSize, capturer: capturer, ownedGroup: group) { _ in settings }
     }
 
     // MARK: - Connect (Interactive / YubiKey)
@@ -195,10 +248,23 @@ public class SSHSessionManager: ObservableObject {
         username: String,
         terminalSize: (cols: Int, rows: Int) = (80, 24)
     ) async {
-        guard let (validator, capturer) = buildValidator(for: host, port: port) else { return }
-        await startSession(terminalSize: terminalSize, capturer: capturer) { generation in
+        let trace = newTrace()
+        trace.begin("SSH", host: host, port: port, username: username,
+                    method: "keyboard-interactive (no stored credential; the user answers every prompt)")
+        await connectInteractive(host: host, port: port, username: username, terminalSize: terminalSize, trace: trace)
+    }
+
+    private func connectInteractive(
+        host: String,
+        port: Int,
+        username: String,
+        terminalSize: (cols: Int, rows: Int),
+        trace: LoginTrace
+    ) async {
+        guard let (validator, capturer) = buildValidator(for: host, port: port, trace: trace) else { return }
+        await startSession(trace: trace, terminalSize: terminalSize, capturer: capturer) { generation in
             self.interactiveSettings(host: host, port: port, username: username, password: nil,
-                                     validator: validator, generation: generation)
+                                     validator: validator, generation: generation, trace: trace)
         }
     }
 
@@ -208,7 +274,8 @@ public class SSHSessionManager: ObservableObject {
         username: String,
         password: String?,
         validator: SSHHostKeyValidator,
-        generation: Int
+        generation: Int,
+        trace: LoginTrace
     ) -> SSHClientSettings {
         let ask: KeyboardInteractiveAuthenticator.Ask = { [weak self] prompt, echo in
             guard let self else { return nil }
@@ -221,7 +288,8 @@ public class SSHSessionManager: ObservableObject {
             host: host,
             port: port,
             authenticationMethod: {
-                .custom(KeyboardInteractiveAuthenticator(username: username, password: password, ask: ask, show: show))
+                .custom(KeyboardInteractiveAuthenticator(username: username, password: password,
+                                                         ask: ask, show: show, trace: trace))
             },
             hostKeyValidator: validator
         )
@@ -266,10 +334,11 @@ public class SSHSessionManager: ObservableObject {
     /// trust state can't be determined; the caller must not connect in that case.
     private func buildValidator(
         for host: String,
-        port: Int
+        port: Int,
+        trace: LoginTrace
     ) -> (SSHHostKeyValidator, CapturingHostKeyValidator?)? {
         do {
-            return try HostKeyTrust.validator(for: host, port: port, repository: knownHostRepository)
+            return try HostKeyTrust.validator(for: host, port: port, repository: knownHostRepository, trace: trace)
         } catch {
             log("⚠  \(error.localizedDescription)", color: "31")
             connectionState = .failed(error.localizedDescription)
@@ -296,6 +365,7 @@ public class SSHSessionManager: ObservableObject {
     /// `makeSettings` gets the new session's generation, so anything the settings call back into
     /// (login prompts) can tell whether its session is still the current one.
     private func startSession(
+        trace: LoginTrace,
         terminalSize: (cols: Int, rows: Int),
         capturer: CapturingHostKeyValidator? = nil,
         ownedGroup: EventLoopGroup? = nil,
@@ -305,8 +375,11 @@ public class SSHSessionManager: ObservableObject {
         tearDown()
         generation += 1
         let gen = generation
+        self.trace = trace
         let settings = makeSettings(gen)
         connectionState = .connecting
+        trace.info("tcp: connecting to \(settings.host):\(settings.port), "
+                   + "login timeout \(settings.loginTimeout.nanoseconds / 1_000_000_000)s")
 
         // Snapshot repo reference for use inside the Task (avoids actor isolation issues)
         let repoSnapshot = knownHostRepository
@@ -325,10 +398,12 @@ public class SSHSessionManager: ObservableObject {
 
                 // Disconnected (or reconnected) while the handshake was in flight.
                 guard self.generation == gen else {
+                    trace.info("authenticated, but superseded by a disconnect or newer attempt; closing")
                     try? await sshClient.close()
                     return
                 }
                 self.client = sshClient
+                trace.info("auth: SUCCESS, logged in")
 
                 // If this was a first-time connection, persist the captured key and log the fingerprint.
                 // validateHostKey fires before SSHClient.connect returns, so capturedKey is set here.
@@ -347,8 +422,10 @@ public class SSHSessionManager: ObservableObject {
                     do {
                         try repo.save(knownHost)
                         saveError = nil
+                        trace.info("host key: stored \(keyType) \(fingerprint) as trusted (first use)")
                     } catch {
                         saveError = error
+                        trace.error("host key: could not store \(keyType) \(fingerprint): \(LoginTrace.describe(error))")
                     }
                     await MainActor.run {
                         if let saveError {
@@ -378,8 +455,10 @@ public class SSHSessionManager: ObservableObject {
                     terminalModes: .init([:])
                 )
 
+                trace.info("pty: requesting xterm-256color \(requestedSize.cols)x\(requestedSize.rows)")
                 try await sshClient.withPTY(ptyRequest) { inbound, outbound in
                     guard await MainActor.run(body: { self.generation == gen }) else { return }
+                    trace.info("pty: granted, shell started; login complete")
                     await MainActor.run {
                         self.log("PTY Granted. Starting Shell...", color: "32")
                         self.stdinWriter = outbound
@@ -428,6 +507,8 @@ public class SSHSessionManager: ObservableObject {
                 // The remote shell exited: close the SSH connection, not just the channel.
                 try? await sshClient.close()
                 guard self.generation == gen else { return }
+                trace.info("session ended: the remote shell exited")
+                self.trace = nil
                 self.client = nil
                 self.stdinWriter = nil
                 self.connectionState = .disconnected
@@ -435,6 +516,8 @@ public class SSHSessionManager: ObservableObject {
             } catch is InvalidHostKey {
                 try? await openedClient?.close()
                 guard self.generation == gen else { return }
+                trace.error("failed: host key mismatch (see the presented and trusted fingerprints above)")
+                self.trace = nil
                 self.client = nil
                 await MainActor.run {
                     self.log("", color: "31")
@@ -450,7 +533,12 @@ public class SSHSessionManager: ObservableObject {
             } catch {
                 try? await openedClient?.close()
                 // A deliberate disconnect makes the in-flight session throw; that isn't a failure.
-                guard self.generation == gen else { return }
+                guard self.generation == gen else {
+                    trace.info("ended by a disconnect or newer attempt (\(LoginTrace.describe(error)))")
+                    return
+                }
+                trace.error("failed: \(LoginTrace.describe(error))")
+                self.trace = nil
                 // Login failed or timed out while a prompt was open: close it.
                 self.cancelPrompt()
                 self.client = nil
@@ -513,6 +601,9 @@ public class SSHSessionManager: ObservableObject {
     // MARK: - Disconnect
     
     public func disconnect() {
+        // `trace` is cleared once an attempt ends on its own, so this only logs a live one.
+        trace?.info("disconnected by the user")
+        trace = nil
         tearDown()
         passphraseChallenge = nil
         connectionState = .disconnected
@@ -596,6 +687,7 @@ final class KeyboardInteractiveAuthenticator: NIOSSHClientUserAuthenticationDele
     private let password: String?
     private let ask: Ask
     private let show: Show
+    private let trace: LoginTrace
 
     private var probed = false
     private var triedPassword = false
@@ -603,11 +695,13 @@ final class KeyboardInteractiveAuthenticator: NIOSSHClientUserAuthenticationDele
     /// Set once the stored password has been sent, so a rejected one is never sent again.
     private var passwordSpent = false
 
-    init(username: String, password: String?, ask: @escaping Ask, show: @escaping Show) {
+    init(username: String, password: String?, ask: @escaping Ask, show: @escaping Show,
+         trace: LoginTrace = LoginTrace()) {
         self.username = username
         self.password = password
         self.ask = ask
         self.show = show
+        self.trace = trace
     }
 
     func nextAuthenticationType(
@@ -623,22 +717,32 @@ final class KeyboardInteractiveAuthenticator: NIOSSHClientUserAuthenticationDele
         // gets that list without spending one of the server's allowed attempts.
         guard probed else {
             probed = true
+            trace.info("auth: sending 'none' to learn which methods the server accepts")
             offer(.none)
             return
         }
 
+        let tried = [triedPassword ? "password" : nil, triedKeyboardInteractive ? "keyboard-interactive" : nil]
+            .compactMap { $0 }
+        trace.info("auth: server accepts [\(LoginTrace.describe(availableMethods))]"
+                   + (tried.isEmpty ? "" : " after rejecting [\(tried.joined(separator: ", "))]"))
+
         if let password, !triedPassword, availableMethods.contains(.password) {
             triedPassword = true
             passwordSpent = true
+            trace.info("auth: offering password (stored in vault)")
             offer(.password(.init(password: password)))
         } else if !triedKeyboardInteractive, availableMethods.contains(.keyboardInteractive) {
             triedKeyboardInteractive = true
+            trace.info("auth: offering keyboard-interactive")
             offer(.keyboardInteractive(.init()))
         } else if triedPassword || triedKeyboardInteractive {
+            trace.error("auth: no methods left to try; the server rejected [\(tried.joined(separator: ", "))]")
             nextChallengePromise.fail(SSHLoginError.rejected)
         } else {
-            nextChallengePromise.fail(SSHLoginError.noUsableMethod(
-                password == nil ? "keyboard-interactive" : "password or keyboard-interactive"))
+            let wanted = password == nil ? "keyboard-interactive" : "password or keyboard-interactive"
+            trace.error("auth: server accepts none of the methods this login can use (\(wanted))")
+            nextChallengePromise.fail(SSHLoginError.noUsableMethod(wanted))
         }
     }
 
@@ -662,6 +766,18 @@ final class KeyboardInteractiveAuthenticator: NIOSSHClientUserAuthenticationDele
         let header = [challenge.name, challenge.instruction].filter { !$0.isEmpty }
         let ask = self.ask
         let show = self.show
+        let trace = self.trace
+
+        trace.info("auth: keyboard-interactive challenge, name \(LoginTrace.quoted(challenge.name)), "
+                   + "instruction \(LoginTrace.quoted(challenge.instruction)), \(challenge.prompts.count) prompt(s)")
+        for (index, answer) in answers.enumerated() {
+            switch answer {
+            case .stored(let prompt, _):
+                trace.info("auth:   prompt \(index + 1) \(LoginTrace.quoted(prompt)) (hidden): answered with the vault password")
+            case .ask(let prompt, let echo):
+                trace.info("auth:   prompt \(index + 1) \(LoginTrace.quoted(prompt)) (\(echo ? "echoed" : "hidden")): asking the user")
+            }
+        }
 
         Task {
             for line in header {
@@ -675,12 +791,14 @@ final class KeyboardInteractiveAuthenticator: NIOSSHClientUserAuthenticationDele
                     responses.append(password)
                 case .ask(let prompt, let echo):
                     guard let response = await ask(prompt, echo) else {
+                        trace.error("auth: user cancelled the prompt \(LoginTrace.quoted(prompt))")
                         responsePromise.fail(SSHLoginError.cancelled)
                         return
                     }
                     responses.append(response)
                 }
             }
+            trace.info("auth: sending \(responses.count) answer(s)")
             responsePromise.succeed(responses)
         }
     }

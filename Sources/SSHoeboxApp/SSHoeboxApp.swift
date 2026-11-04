@@ -39,6 +39,10 @@ struct SSHoeboxApp: App {
             }
         }
         .commands {
+            CommandGroup(before: .windowList) {
+                OpenLoginLogCommand()
+                Divider()
+            }
             CommandGroup(after: .textEditing) {
                 Button("Increase Font Size") {
                     ThemeManager.shared.increaseFontSize()
@@ -52,10 +56,26 @@ struct SSHoeboxApp: App {
             }
         }
 
+        Window("Login Log", id: LoginLogStore.windowID) {
+            LoginLogView(viewModel: viewModel)
+                .preferredColorScheme(.dark)
+        }
+        .defaultSize(width: 900, height: 520)
+
         MenuBarExtra("SSHoebox", systemImage: "server.rack") {
             MenuBarView(viewModel: viewModel)
                 .environmentObject(sessionRegistry)
         }
         .menuBarExtraStyle(.window)
+    }
+}
+
+/// Window → Login Log (⌥⌘L). A view of its own so it can read `openWindow`.
+private struct OpenLoginLogCommand: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("Login Log") { OpenLoginLogAction(openWindow: openWindow)() }
+            .keyboardShortcut("l", modifiers: [.command, .option])
     }
 }

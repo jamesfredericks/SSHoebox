@@ -145,12 +145,14 @@ struct AgentSignature<Algorithm: AgentKeyAlgorithm>: NIOSSHSignatureProtocol {
 final class AgentKeyAuthenticator: NIOSSHClientUserAuthenticationDelegate, @unchecked Sendable {
     private let username: String
     private let privateKey: NIOSSHPrivateKey
+    private let trace: LoginTrace
     private var probed = false
     private var offered = false
 
-    init(username: String, privateKey: NIOSSHPrivateKey) {
+    init(username: String, privateKey: NIOSSHPrivateKey, trace: LoginTrace = LoginTrace()) {
         self.username = username
         self.privateKey = privateKey
+        self.trace = trace
     }
 
     func nextAuthenticationType(
@@ -164,16 +166,22 @@ final class AgentKeyAuthenticator: NIOSSHClientUserAuthenticationDelegate, @unch
 
         guard probed else {
             probed = true
+            trace.info("auth: sending 'none' to learn which methods the server accepts")
             offer(.none)
             return
         }
 
+        trace.info("auth: server accepts [\(LoginTrace.describe(availableMethods))]"
+                   + (offered ? " after rejecting the agent key" : ""))
         if !offered, availableMethods.contains(.publicKey) {
             offered = true
+            trace.info("auth: offering the agent key; the agent signs now and may wait for approval")
             offer(.privateKey(.init(privateKey: privateKey)))
         } else if offered {
+            trace.error("auth: the server rejected the agent key (is it in authorized_keys for this user?)")
             nextChallengePromise.fail(SSHLoginError.rejected)
         } else {
+            trace.error("auth: the server doesn't accept public key login")
             nextChallengePromise.fail(SSHLoginError.noUsableMethod("public key"))
         }
     }

@@ -180,6 +180,7 @@ struct SessionStateOverlay: View {
     let onReconnect: () -> Void
     let onPassphrase: (String) -> Void
 
+    @Environment(\.openWindow) private var openWindow
     @State private var passphraseInput = ""
 
     var body: some View {
@@ -203,9 +204,15 @@ struct SessionStateOverlay: View {
             Text("Session ended")
                 .font(.title3)
                 .foregroundStyle(DesignSystem.Colors.textSecondary)
-            Button("Reconnect") { onReconnect() }
-                .buttonStyle(.borderedProminent)
-                .tint(DesignSystem.Colors.accent)
+            HStack(spacing: 12) {
+                Button("View Login Log") {
+                    OpenLoginLogAction(openWindow: openWindow)(attemptID: manager.lastLoginAttemptID)
+                }
+                .help("Show what happened during this login")
+                Button("Reconnect") { onReconnect() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(DesignSystem.Colors.accent)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(red: 0.05, green: 0.05, blue: 0.08))

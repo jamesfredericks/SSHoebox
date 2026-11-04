@@ -339,6 +339,9 @@ class VaultViewModel: ObservableObject {
         // End SSH sessions and clear any secret still on the clipboard
         onLock?()
         ClipboardManager.shared.clearNow()
+
+        // The in-app login log names hosts and users; the macOS log keeps its own copy.
+        LoginLogBuffer.shared.removeAll()
         
         // Stop auto-lock monitoring
         stopAutoLockMonitoring()

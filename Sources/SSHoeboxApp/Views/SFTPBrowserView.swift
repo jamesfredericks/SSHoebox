@@ -14,6 +14,7 @@ struct SFTPBrowserView: View {
     @State private var statusMessage: String? = nil
     @State private var showingFilePicker = false
     @State private var passphraseInput = ""
+    @Environment(\.openWindow) private var openWindow
 
     var displayedEntries: [SFTPEntry] {
         showHidden ? sftp.entries : sftp.entries.filter { !$0.isHidden }
@@ -223,6 +224,10 @@ struct SFTPBrowserView: View {
                 .foregroundStyle(DesignSystem.Colors.textSecondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
+            Button("View Login Log") {
+                OpenLoginLogAction(openWindow: openWindow)(attemptID: sftp.lastLoginAttemptID)
+            }
+            .help("Show what happened during this login")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

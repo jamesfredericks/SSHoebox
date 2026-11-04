@@ -175,6 +175,8 @@ class TerminalSessionStore: ObservableObject {
                 await manager.connect(host: hostname, port: port, username: username, password: password)
             } else {
                 manager.log("ERROR: Decryption failed for password.", color: "31")
+                LoginTrace.event("credential \(cred.id): stored password could not be decrypted; "
+                                 + "falling back to keyboard-interactive", level: .error)
                 await manager.connectInteractive(host: hostname, port: port, username: username)
             }
         } else if let cred = credentialsViewModel.credentials.first(where: { $0.type == "key" }) {
@@ -184,6 +186,8 @@ class TerminalSessionStore: ObservableObject {
                 await manager.connect(host: hostname, port: port, username: username, pemKey: pem)
             } else {
                 manager.log("ERROR: Decryption failed for private key.", color: "31")
+                LoginTrace.event("credential \(cred.id): stored private key could not be decrypted; "
+                                 + "falling back to keyboard-interactive", level: .error)
                 await manager.connectInteractive(host: hostname, port: port, username: username)
             }
         } else if let cred = credentialsViewModel.credentials.first(where: { $0.type == SSHAgentKeyReference.credentialType }) {
@@ -193,6 +197,8 @@ class TerminalSessionStore: ObservableObject {
                 await manager.connect(host: hostname, port: port, username: username, agentKey: agentKey)
             } else {
                 manager.log("ERROR: Could not read the SSH agent key for this credential.", color: "31")
+                LoginTrace.event("credential \(cred.id): SSH agent key reference could not be read; "
+                                 + "falling back to keyboard-interactive", level: .error)
                 await manager.connectInteractive(host: hostname, port: port, username: username)
             }
         } else {
