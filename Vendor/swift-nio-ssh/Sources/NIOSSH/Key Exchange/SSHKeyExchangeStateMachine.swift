@@ -343,6 +343,13 @@ struct SSHKeyExchangeStateMachine {
             throw NIOSSHError.keyExchangeNegotiationFailure
         }
 
+        // SSHoebox patch: report what was agreed, as `ssh -v` does.
+        if let debugObserver = self.role.debugObserver {
+            debugObserver("kex: algorithm \(keyExchange), host key algorithm \(hostKey)")
+            let mac = scheme.macNames.isEmpty ? "<implicit>" : String(clientMAC)
+            debugObserver("kex: cipher \(scheme.cipherName), MAC \(mac), compression none (both directions)")
+        }
+
         // Great, we have a protection scheme. Build the negotiation result.
         return NegotiationResult(negotiatedKeyExchangeAlgorithm: keyExchange, negotiatedHostKeyAlgorithm: hostKey, negotiatedMacAlgorithm: clientMAC, negotiatedProtection: scheme)
     }

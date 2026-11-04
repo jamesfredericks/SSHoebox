@@ -12,6 +12,7 @@ struct LoginLogView: View {
     @State private var search = ""
     @State private var errorsOnly = false
     @State private var copied = false
+    @AppStorage(LoginTrace.verboseDefaultsKey) private var verbose = true
 
     static let showCommand =
         #"/usr/bin/log show --last 1d --style compact --predicate 'subsystem == "com.sshoebox.app" AND category == "login"'"#
@@ -77,6 +78,9 @@ struct LoginLogView: View {
 
             Spacer()
 
+            Toggle("Verbose", isOn: $verbose)
+                .toggleStyle(.checkbox)
+                .help("Record every SSH message, like ssh -v. Applies to the next login.")
             Toggle("Errors only", isOn: $errorsOnly)
                 .toggleStyle(.checkbox)
 
@@ -195,12 +199,20 @@ private struct LoginLogRow: View {
     let isFocused: Bool
     let onShowAttempt: (String) -> Void
 
+    private var color: Color {
+        switch entry.level {
+        case .error: return DesignSystem.Colors.error
+        case .info: return DesignSystem.Colors.textPrimary
+        case .debug: return DesignSystem.Colors.textSecondary
+        }
+    }
+
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: DesignSystem.Spacing.standard) {
             Text(LoginLogStore.timestamp(entry.date).suffix(12))
                 .foregroundStyle(DesignSystem.Colors.textSecondary)
             Text(entry.line)
-                .foregroundStyle(entry.level == .error ? DesignSystem.Colors.error : DesignSystem.Colors.textPrimary)
+                .foregroundStyle(color)
                 .fixedSize(horizontal: true, vertical: false)
         }
         .font(.system(size: 12, design: .monospaced))

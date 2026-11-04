@@ -376,7 +376,8 @@ public class SSHSessionManager: ObservableObject {
         generation += 1
         let gen = generation
         self.trace = trace
-        let settings = makeSettings(gen)
+        var settings = makeSettings(gen)
+        settings.debugObserver = trace.protocolObserver
         connectionState = .connecting
         trace.info("tcp: connecting to \(settings.host):\(settings.port), "
                    + "login timeout \(settings.loginTimeout.nanoseconds / 1_000_000_000)s")
@@ -458,7 +459,7 @@ public class SSHSessionManager: ObservableObject {
                 trace.info("pty: requesting xterm-256color \(requestedSize.cols)x\(requestedSize.rows)")
                 try await sshClient.withPTY(ptyRequest) { inbound, outbound in
                     guard await MainActor.run(body: { self.generation == gen }) else { return }
-                    trace.info("pty: granted, shell started; login complete")
+                    trace.info("pty: pty-req and shell sent; login complete (a refusal shows as SSH_MSG_CHANNEL_FAILURE)")
                     await MainActor.run {
                         self.log("PTY Granted. Starting Shell...", color: "32")
                         self.stdinWriter = outbound

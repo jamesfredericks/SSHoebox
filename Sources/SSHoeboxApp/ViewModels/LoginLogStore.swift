@@ -59,10 +59,18 @@ final class LoginLogStore: ObservableObject {
         timestampFormatter.string(from: date)
     }
 
+    private static func label(_ level: LoginTrace.Level) -> String {
+        switch level {
+        case .debug: return "debug"
+        case .info: return "     "
+        case .error: return "ERROR"
+        }
+    }
+
     /// Plain text of `entries`, one line each, for the clipboard or a file.
     static func text(of entries: [LoginLogEntry]) -> String {
         entries.map { entry in
-            "\(timestamp(entry.date)) \(entry.level == .error ? "ERROR" : "     ") \(entry.line)"
+            "\(timestamp(entry.date)) \(label(entry.level)) \(entry.line)"
         }.joined(separator: "\n") + "\n"
     }
 }

@@ -226,6 +226,7 @@ public class SFTPSessionManager: ObservableObject {
         )
         settings.algorithms = SSHAlgorithmPolicy.algorithms
         settings = configure(settings)
+        settings.debugObserver = trace.protocolObserver
         trace.info("tcp: connecting to \(host):\(port), login timeout \(settings.loginTimeout.nanoseconds / 1_000_000_000)s")
 
         var openedClient: SSHClient?

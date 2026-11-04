@@ -111,6 +111,8 @@ public struct SSHClientSettings: Sendable {
     /// How long authentication may take once connected. SSHoebox patch: raise it when the
     /// user answers prompts (keyboard-interactive one-time codes) during login.
     public var loginTimeout: TimeAmount = .seconds(10)
+    /// SSHoebox patch: receives `ssh -v`-style protocol diagnostics (see `NIOSSHDebugObserver`).
+    public var debugObserver: NIOSSHDebugObserver? = nil
 
     public init(
         host: String,
@@ -180,6 +182,7 @@ final class SSHClientSession: Sendable {
         )
         
         settings.algorithms.apply(to: &clientConfiguration)
+        clientConfiguration.debugObserver = settings.debugObserver
         
         for option in settings.protocolOptions {
             option.apply(to: &clientConfiguration)
@@ -215,6 +218,7 @@ final class SSHClientSession: Sendable {
         )
         
         settings.algorithms.apply(to: &clientConfiguration)
+        clientConfiguration.debugObserver = settings.debugObserver
         
         for option in settings.protocolOptions {
             option.apply(to: &clientConfiguration)

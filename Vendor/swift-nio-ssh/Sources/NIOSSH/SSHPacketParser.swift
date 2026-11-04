@@ -28,6 +28,8 @@ struct SSHPacketParser {
     private var sequenceNumber: UInt32 = 0
     private let maximumPacketSize: Int
     internal static let defaultMaximumPacketSize = 1 << 17
+    /// SSHoebox patch: told about every message parsed. See `NIOSSHDebugObserver`.
+    internal var debugObserver: NIOSSHDebugObserver?
 
     /// Testing only: the number of bytes we can discard from this buffer.
     internal var _discardableBytes: Int {
@@ -63,6 +65,14 @@ struct SSHPacketParser {
     }
 
     mutating func nextPacket() throws -> SSHMessage? {
+        let message = try self.nextUnobservedPacket()
+        if let message, let observer = self.debugObserver {
+            for line in message.redactedDebugLines { observer("← " + line) }
+        }
+        return message
+    }
+
+    private mutating func nextUnobservedPacket() throws -> SSHMessage? {
         // This parser has a slightly strange strategy: we leave the packet length field in the buffer until we're done.
         // This is necessary because some transport protection schemes need the length field for MACing purposes, and can
         // benefit from us maintaining the state instead of having to do it themselves.

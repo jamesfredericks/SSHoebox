@@ -23,6 +23,9 @@ struct SSHPacketSerializer {
 
     private var state: State = .initialized
     private var sequenceNumber: UInt32 = 0
+    /// SSHoebox patch: told about every message sent, including those the state machine adds
+    /// itself (such as the service request after NEWKEYS). See `NIOSSHDebugObserver`.
+    internal var debugObserver: NIOSSHDebugObserver?
 
     /// Encryption schemes can be added to a packet serializer whenever encryption is negotiated.
     mutating func addEncryption(_ protection: NIOSSHTransportProtection) {
@@ -40,6 +43,9 @@ struct SSHPacketSerializer {
         message: SSHMessage,
         to buffer: inout ByteBuffer
     ) throws {
+        if let debugObserver {
+            for line in message.redactedDebugLines { debugObserver("→ " + line) }
+        }
         switch self.state {
         case .initialized:
             switch message {

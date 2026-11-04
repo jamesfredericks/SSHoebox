@@ -32,6 +32,9 @@ public struct SSHClientConfiguration {
     /// The maximum packet size that this NIOSSH client will accept
     public var maximumPacketSize = SSHPacketParser.defaultMaximumPacketSize
 
+    /// SSHoebox patch: receives `ssh -v`-style protocol diagnostics. See `NIOSSHDebugObserver`.
+    public var debugObserver: NIOSSHDebugObserver? = nil
+
     public init(userAuthDelegate: NIOSSHClientUserAuthenticationDelegate,
                 serverAuthDelegate: NIOSSHClientServerAuthenticationDelegate,
                 globalRequestDelegate: GlobalRequestDelegate? = nil)

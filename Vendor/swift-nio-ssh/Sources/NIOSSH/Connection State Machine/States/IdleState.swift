@@ -29,6 +29,7 @@ extension SSHConnectionStateMachine {
         init(role: SSHConnectionRole, attributes: SSHConnectionStateMachine.Attributes) {
             self.role = role
             self.serializer = SSHPacketSerializer()
+            self.serializer.debugObserver = role.debugObserver
             self.protectionSchemes = role.transportProtectionSchemes
             self.keyExchangeAlgorithms = role.keyExchangeAlgorithms
             self.connectionAttributes = attributes

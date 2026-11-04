@@ -30,6 +30,8 @@ public final class NIOSSHHandler {
 
     /// The state machine that drives the connection.
     private var stateMachine: SSHConnectionStateMachine
+    /// SSHoebox patch: told about every message sent. See `NIOSSHDebugObserver`.
+    private let debugObserver: NIOSSHDebugObserver?
 
     /// A buffer used to provide scratch space for writing data to the network.
     ///
@@ -68,6 +70,7 @@ public final class NIOSSHHandler {
     ///     - inboundChildChannelInitializer: A callback that will be invoked whenever the remote peer attempts to construct a new SSH channel in a connection.
     public init(role: SSHConnectionRole, allocator: ByteBufferAllocator, inboundChildChannelInitializer: ((Channel, SSHChannelType) -> EventLoopFuture<Void>)?) {
         self.stateMachine = SSHConnectionStateMachine(role: role)
+        self.debugObserver = role.debugObserver
         self.pendingWrite = false
         self.outboundFrameBuffer = allocator.buffer(capacity: 1024)
         self.pendingChannelInitializations = CircularBuffer(initialCapacity: 4)
@@ -140,6 +143,11 @@ extension NIOSSHHandler: ChannelDuplexHandler {
     private func initialize(context: ChannelHandlerContext) {
         // The connection is active, let's go yo. We have to flush here.
         if let message = self.stateMachine.start() {
+            if let debugObserver {
+                let remote = context.channel.remoteAddress.map { "\($0)" } ?? "(unknown)"
+                let local = context.channel.localAddress.map { "\($0)" } ?? "(unknown)"
+                debugObserver("tcp: connected to \(remote) from \(local)")
+            }
             do {
                 try self.writeMessage(message, context: context)
                 self.pendingWrite = false

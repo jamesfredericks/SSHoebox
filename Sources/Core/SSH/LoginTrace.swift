@@ -12,13 +12,18 @@ import NIOSSH
 ///
 /// or Console.app filtered on that subsystem.
 ///
+/// With `verbose` on, it also records the protocol itself, like `ssh -v`: the TCP connection,
+/// version strings, both sides' algorithm lists and what was agreed, and every SSH message
+/// sent and received up to and including the session's channel setup (see
+/// `NIOSSHDebugObserver`). Those lines have level `.debug`.
+///
 /// What it records: the target, the username, the login method, what the server accepts,
 /// what was offered, server prompts, key types and fingerprints, host key trust, timings and
 /// errors. What it never records: passwords, private keys, passphrases, or anything the user
 /// types at a prompt. Keep it that way: every message is logged as public text, so a secret
 /// passed in would be readable by anyone with `log show` access.
 public struct LoginTrace: Sendable {
-    public enum Level: Sendable { case info, error }
+    public enum Level: Sendable { case debug, info, error }
     public typealias Sink = @Sendable (_ level: Level, _ line: String) -> Void
 
     public static let subsystem = "com.sshoebox.app"
@@ -29,7 +34,8 @@ public struct LoginTrace: Sendable {
     /// after the fact.
     public static let systemSink: Sink = { level, line in
         switch level {
-        case .info: logger.notice("\(line, privacy: .public)")
+        // Verbose lines are kept on disk too: they're what explains a failed login afterwards.
+        case .debug, .info: logger.notice("\(line, privacy: .public)")
         case .error: logger.error("\(line, privacy: .public)")
         }
         LoginLogBuffer.shared.append(level: level, line: line)
@@ -46,6 +52,23 @@ public struct LoginTrace: Sendable {
         self.sink = sink
     }
 
+    /// UserDefaults key for `verbose`.
+    public static let verboseDefaultsKey = "loginLogVerbose"
+
+    /// Whether new attempts record the protocol in detail (`ssh -v`). On unless turned off.
+    public static var verbose: Bool {
+        UserDefaults.standard.object(forKey: verboseDefaultsKey) as? Bool ?? true
+    }
+
+    /// Set as a connection's `SSHClientSettings.debugObserver` to record the protocol, or nil
+    /// when verbose logging is off.
+    public var protocolObserver: NIOSSHDebugObserver? {
+        guard Self.verbose else { return nil }
+        let trace = self
+        return { line in trace.debug(line) }
+    }
+
+    public func debug(_ message: String) { sink(.debug, line(message)) }
     public func info(_ message: String) { sink(.info, line(message)) }
     public func error(_ message: String) { sink(.error, line(message)) }
 
