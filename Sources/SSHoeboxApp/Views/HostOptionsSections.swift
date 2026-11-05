@@ -28,12 +28,16 @@ struct HostOptionsSections: View {
                         Text(Self.label(for: choice)).tag(choice)
                     }
                 }
-                TextField("Startup command", text: Binding(
-                    get: { options.startupCommand ?? "" },
-                    set: { options.startupCommand = $0.isEmpty ? nil : $0 }
-                ), prompt: Text("e.g. sudo -i, or cd /var/log"))
-                    .font(DesignSystem.Typography.mono())
-                    .autocorrectionDisabled()
+                LabeledContent("Startup command") {
+                    TextField("Startup command", text: Binding(
+                        get: { options.startupCommand ?? "" },
+                        set: { options.startupCommand = $0.isEmpty ? nil : $0 }
+                    ), prompt: Text("e.g. sudo -i, or cd /var/log"))
+                        .labelsHidden()
+                        .multilineTextAlignment(.trailing)
+                        .font(DesignSystem.Typography.mono())
+                        .autocorrectionDisabled()
+                }
             } header: {
                 Text("Connection")
             } footer: {

@@ -79,15 +79,54 @@ struct SFTPBrowserView: View {
         .onChange(of: sftp.currentPath) { selection = [] }
     }
 
+    @ViewBuilder
+    private func entryMenu(_ items: [SFTPEntry]) -> some View {
+        if !items.isEmpty {
+            if items.count == 1, let folder = items.first, folder.isDirectory {
+                Button {
+                    Task { await sftp.navigate(to: folder.path) }
+                } label: {
+                    Label("Open", systemImage: "folder")
+                }
+            }
+            Button {
+                chooseDownloadFolder(for: items)
+            } label: {
+                Label(items.count == 1 ? "Download…" : "Download \(items.count) Items…", systemImage: "square.and.arrow.down")
+            }
+            Button {
+                sftp.download(items, to: Self.downloadsFolder)
+                flash("Downloading to Downloads…")
+            } label: {
+                Label("Download to Downloads", systemImage: "arrow.down.circle")
+            }
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(items.map(\.path).joined(separator: "\n"), forType: .string)
+            } label: {
+                Label(items.count == 1 ? "Copy Path" : "Copy Paths", systemImage: "doc.on.doc")
+            }
+            if items.count == 1, let entry = items.first {
+                Button {
+                    renameText = entry.filename
+                    entryToRename = entry
+                } label: {
+                    Label("Rename…", systemImage: "pencil")
+                }
+            }
+            Divider()
+            Button(role: .destructive) {
+                entriesToDelete = items
+            } label: {
+                Label(items.count == 1 ? "Delete…" : "Delete \(items.count) Items…", systemImage: "trash")
+            }
+        }
+    }
+
     private var selectedEntries: [SFTPEntry] {
         displayedEntries.filter { selection.contains($0.id) }
     }
 
-    /// The entries a context-menu action applies to: the selection if the clicked row is in
-    /// it, otherwise just the clicked row.
-    private func targets(for entry: SFTPEntry) -> [SFTPEntry] {
-        selection.contains(entry.id) ? selectedEntries : [entry]
-    }
 
     // MARK: - Control Bar (breadcrumb + action buttons)
 
@@ -203,57 +242,12 @@ struct SFTPBrowserView: View {
             } else {
                 List(displayedEntries, selection: $selection) { entry in
                     SFTPEntryRow(entry: entry)
-                        .contentShape(Rectangle())
-                        .contextMenu {
-                            let items = targets(for: entry)
-                            if entry.isDirectory && items.count == 1 {
-                                Button {
-                                    Task { await sftp.navigate(to: entry.path) }
-                                } label: {
-                                    Label("Open", systemImage: "folder")
-                                }
-                            }
-                            Button {
-                                chooseDownloadFolder(for: items)
-                            } label: {
-                                Label(items.count == 1 ? "Download…" : "Download \(items.count) Items…",
-                                      systemImage: "square.and.arrow.down")
-                            }
-                            Button {
-                                sftp.download(items, to: Self.downloadsFolder)
-                                flash("Downloading to Downloads…")
-                            } label: {
-                                Label("Download to Downloads", systemImage: "arrow.down.circle")
-                            }
-                            Button {
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(items.map(\.path).joined(separator: "\n"), forType: .string)
-                            } label: {
-                                Label(items.count == 1 ? "Copy Path" : "Copy Paths", systemImage: "doc.on.doc")
-                            }
-
-                            if items.count == 1 {
-                                Button {
-                                    renameText = entry.filename
-                                    entryToRename = entry
-                                } label: {
-                                    Label("Rename…", systemImage: "pencil")
-                                }
-                            }
-
-                            Divider()
-
-                            Button(role: .destructive) {
-                                entriesToDelete = items
-                            } label: {
-                                Label(items.count == 1 ? "Delete…" : "Delete \(items.count) Items…", systemImage: "trash")
-                            }
-                        }
                 }
-                .contextMenu(forSelectionType: SFTPEntry.ID.self) { _ in
-                    EmptyView()
+                // SwiftUI passes the selection when the clicked row is selected, else that row.
+                .contextMenu(forSelectionType: SFTPEntry.ID.self) { ids in
+                    entryMenu(displayedEntries.filter { ids.contains($0.id) })
                 } primaryAction: { ids in
-                    // Double-click or Return: open a folder, download a file.
+                    // Double-click or Return: open a folder, download files.
                     let chosen = displayedEntries.filter { ids.contains($0.id) }
                     if chosen.count == 1, let folder = chosen.first, folder.isDirectory {
                         Task { await sftp.navigate(to: folder.path) }

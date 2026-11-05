@@ -411,6 +411,7 @@ public class SSHSessionManager: ObservableObject {
                 self.endSession()
                 await MainActor.run {
                     let detailedError = (error as? SSHAgentClientError)?.localizedDescription
+                        ?? ConnectionErrorText.describe(error)
                         ?? String(describing: error)
                     let errorType = String(describing: type(of: error))
                     self.log("ERROR [\(errorType)]: \(detailedError)", color: "31")

@@ -254,7 +254,8 @@ public enum SSHRouteError: Error, LocalizedError, CustomStringConvertible {
     public var description: String {
         switch self {
         case .jumpHostFailed(let index, let endpoint, let underlying):
-            let reason = (underlying as? LocalizedError)?.errorDescription ?? String(describing: underlying)
+            let reason = ConnectionErrorText.describe(underlying)
+                ?? (underlying as? LocalizedError)?.errorDescription ?? String(describing: underlying)
             return "Jump host \(index + 1) (\(endpoint)): \(reason)"
         }
     }

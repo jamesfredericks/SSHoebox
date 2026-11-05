@@ -192,7 +192,10 @@ public class SFTPSessionManager: ObservableObject {
                 return
             }
             trace.error("failed: \(LoginTrace.describe(error))")
-            let message = (error as? SSHAgentClientError)?.localizedDescription ?? error.localizedDescription
+            let message = (error as? SSHAgentClientError)?.localizedDescription
+                ?? ConnectionErrorText.describe(error)
+                ?? (error as? SSHRouteError)?.description
+                ?? error.localizedDescription
             fail(message, message)
         }
     }
