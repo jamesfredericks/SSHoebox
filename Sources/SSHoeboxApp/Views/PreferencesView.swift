@@ -7,12 +7,14 @@ struct PreferencesView: View {
     @State private var autoLockTimeout: Int = 15
     @AppStorage(VaultViewModel.deferAutoLockForSessionsKey) private var deferAutoLockForSessions = false
     @AppStorage("terminalAllowOSC52") private var allowOSC52 = false
+    @AppStorage(SSHSessionOptions.keepAliveDefaultsKey) private var keepAliveInterval = SSHSessionOptions.defaultKeepAliveInterval
     @State private var clipboardClearTimeout: Int = 30
     @State private var isBiometricEnabled: Bool = false
     @State private var showBiometricVaultLockedAlert: Bool = false
     @State private var knownHosts: [KnownHost] = []
     @State private var knownHostToDelete: KnownHost? = nil
     @State private var showDeleteKnownHostAlert: Bool = false
+    @State private var isDefaultSSHHandler = false
     
     var body: some View {
         Form {
@@ -171,6 +173,34 @@ struct PreferencesView: View {
                 }
             }
             
+            Section {
+                Picker("Keep-alive", selection: $keepAliveInterval) {
+                    Text("Off").tag(0)
+                    Text("Every 15 s").tag(15)
+                    Text("Every 30 s").tag(30)
+                    Text("Every 1 min").tag(60)
+                    Text("Every 2 min").tag(120)
+                    Text("Every 5 min").tag(300)
+                }
+                HStack {
+                    Text("ssh:// links")
+                        .foregroundStyle(DesignSystem.Colors.textPrimary)
+                    Spacer()
+                    if isDefaultSSHHandler {
+                        Text("Open in SSHoebox")
+                            .foregroundStyle(DesignSystem.Colors.textSecondary)
+                    } else {
+                        Button("Open in SSHoebox") { makeDefaultSSHHandler() }
+                    }
+                }
+            } header: {
+                Text("Connections")
+                    .foregroundStyle(DesignSystem.Colors.textSecondary)
+            } footer: {
+                Text("Keep-alives stop firewalls and NAT from dropping idle sessions, and notice a dead connection: after three go unanswered, the session is closed so you can reconnect. Hosts can override this in Edit Host. An ssh:// link opens the matching saved host, or a new host filled in from the link.")
+                    .foregroundStyle(DesignSystem.Colors.textSecondary)
+            }
+
             // SSH Agent Section
             Section {
                 Toggle("Enable SSH Agent", isOn: $viewModel.isAgentEnabled)
@@ -301,6 +331,7 @@ struct PreferencesView: View {
         .tint(DesignSystem.Colors.accent)
         .navigationTitle("Preferences")
         .onAppear {
+            isDefaultSSHHandler = Self.checkDefaultSSHHandler()
             loadSettings()
             // Read biometric state fresh from the source of truth
             isBiometricEnabled = viewModel.isBiometricEnrolled
@@ -397,5 +428,26 @@ struct KnownHostRow: View {
                 .foregroundStyle(DesignSystem.Colors.textSecondary.opacity(0.7))
         }
         .padding(.vertical, 4)
+    }
+}
+
+
+extension PreferencesView {
+    /// Whether macOS opens ssh:// links with this app.
+    static func checkDefaultSSHHandler() -> Bool {
+        guard let url = URL(string: "ssh://localhost"),
+              let handler = NSWorkspace.shared.urlForApplication(toOpen: url) else { return false }
+        return handler.standardizedFileURL == Bundle.main.bundleURL.standardizedFileURL
+    }
+
+    func makeDefaultSSHHandler() {
+        NSWorkspace.shared.setDefaultApplication(at: Bundle.main.bundleURL, toOpenURLsWithScheme: "ssh") { error in
+            DispatchQueue.main.async {
+                if let error {
+                    LoginTrace.event("could not make SSHoebox the ssh:// handler: \(error.localizedDescription)", level: .error)
+                }
+                isDefaultSSHHandler = Self.checkDefaultSSHHandler()
+            }
+        }
     }
 }

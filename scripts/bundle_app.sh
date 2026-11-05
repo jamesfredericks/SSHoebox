@@ -106,6 +106,20 @@ cat > "${APP_BUNDLE}/Contents/Info.plist" <<PLIST
     <true/>
     <key>NSFaceIDUsageDescription</key>
     <string>SSHoebox uses Touch ID to securely unlock your vault.</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>SSH link</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>ssh</string>
+                <string>sshoebox</string>
+            </array>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+        </dict>
+    </array>
 </dict>
 </plist>
 PLIST

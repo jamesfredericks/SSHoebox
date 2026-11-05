@@ -5,6 +5,7 @@ import CryptoKit
 struct HostDetailView: View {
     @ObservedObject private var themeManager = ThemeManager.shared
     @EnvironmentObject private var sessionRegistry: TerminalSessionRegistry
+    @EnvironmentObject private var navigator: AppNavigator
     @Environment(\.dismiss) var dismiss
     let host: SavedHost
     let dbManager: DatabaseManager
@@ -107,6 +108,8 @@ struct HostDetailView: View {
         } message: {
             Text("Are you sure you want to delete '\(host.decryptedName(using: vaultKey))'? This action cannot be undone.")
         }
+        .onAppear { performPendingAction() }
+        .onChange(of: navigator.pendingAction) { performPendingAction() }
         .onChange(of: selectedTab) { _, newTab in
             if newTab == .files && sftpManager.connectionState == .disconnected {
                 Task { await connectSFTP() }
@@ -260,6 +263,19 @@ struct HostDetailView: View {
     }
 
     
+    /// Runs what Quick Connect, a link or the host list asked for, once this host is showing.
+    private func performPendingAction() {
+        guard let action = navigator.takeAction(for: host.id) else { return }
+        switch action {
+        case .terminal: connect(protocol: "ssh")
+        case .files: connect(protocol: "sftp")
+        case .newTerminal:
+            selectedTab = .terminal
+            sessionRegistry.store(for: host, dbManager: dbManager, vaultKey: vaultKey).openNewSession()
+        case .show: break
+        }
+    }
+
     func connect(protocol type: String) {
         if type == "sftp" {
             selectedTab = .files

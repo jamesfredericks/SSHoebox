@@ -93,6 +93,15 @@ struct ImportSSHConfigSheet: View {
                                 Text(detail)
                                     .font(DesignSystem.Typography.mono())
                                     .foregroundStyle(DesignSystem.Colors.textSecondary)
+                                let extras = [
+                                    host.proxyJump.isEmpty ? nil : "via \(host.proxyJump.joined(separator: ", "))",
+                                    host.localForwards.isEmpty ? nil : "\(host.localForwards.count) tunnel\(host.localForwards.count == 1 ? "" : "s")",
+                                ].compactMap { $0 }
+                                if !extras.isEmpty {
+                                    Text(extras.joined(separator: " · "))
+                                        .font(.caption)
+                                        .foregroundStyle(DesignSystem.Colors.textSecondary.opacity(0.8))
+                                }
                             }
                             Spacer()
                         }
@@ -162,18 +171,7 @@ struct ImportSSHConfigSheet: View {
 
     private func performImport() {
         let toImport = configHosts.filter { selected.contains($0.alias) }
-        var count = 0
-        for entry in toImport {
-            viewModel.addHost(
-                name: entry.alias,
-                hostname: entry.hostname,
-                port: entry.port,
-                protocolType: "ssh",
-                user: entry.user
-            )
-            count += 1
-        }
-        importedCount = count
+        importedCount = viewModel.importConfigHosts(toImport)
         importDone = true
     }
 }

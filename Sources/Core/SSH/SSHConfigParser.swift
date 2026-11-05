@@ -23,6 +23,13 @@ public struct SSHConfigParser {
         public let port: Int              // Default 22
         public let user: String           // User directive (may be empty)
         public let identityFile: String?  // First IdentityFile path (may be empty)
+        /// `ProxyJump` hops in connection order, as written (`[user@]host[:port]`); empty for
+        /// none. Each may be an alias defined elsewhere in the config.
+        public var proxyJump: [String] = []
+        /// Every `LocalForward` that applies (they accumulate, unlike other options).
+        public var localForwards: [PortForward] = []
+        /// `ServerAliveInterval` in seconds, if set.
+        public var serverAliveInterval: Int? = nil
     }
 
     /// OpenSSH's limit on nested `Include`s.
@@ -68,6 +75,9 @@ public struct SSHConfigParser {
         var port: Int? = nil
         var user: String? = nil
         var identityFile: String? = nil
+        var proxyJump: [String]? = nil
+        var localForwards: [PortForward] = []
+        var serverAliveInterval: Int? = nil
 
         // Lines before the first Host/Match apply to every host
         var active = true
@@ -94,19 +104,55 @@ public struct SSHConfigParser {
                 user = value
             case "identityfile" where identityFile == nil:
                 identityFile = (value as NSString).expandingTildeInPath
+            case "proxyjump" where proxyJump == nil:
+                proxyJump = value.lowercased() == "none" ? [] : value.split(separator: ",").map {
+                    $0.trimmingCharacters(in: .whitespaces)
+                }.filter { !$0.isEmpty }
+            case "localforward":
+                if let forward = PortForward.parse(directive.args.joined(separator: " ")) {
+                    localForwards.append(forward)
+                }
+            case "serveraliveinterval" where serverAliveInterval == nil:
+                if let seconds = Int(value), seconds >= 0 { serverAliveInterval = seconds }
             default:
                 break
             }
         }
 
         let resolvedHostname = (hostname?.isEmpty == false) ? hostname! : alias
-        return ConfigHost(
+        var host = ConfigHost(
             alias: alias,
             hostname: resolvedHostname,
             port: port ?? 22,
             user: user ?? "",
             identityFile: identityFile
         )
+        host.proxyJump = proxyJump ?? []
+        host.localForwards = localForwards
+        host.serverAliveInterval = serverAliveInterval
+        return host
+    }
+
+    /// Splits a `ProxyJump` hop (`[user@]host[:port]`, IPv6 in brackets) into its parts.
+    public static func parseJumpSpec(_ spec: String) -> (user: String?, host: String, port: Int?) {
+        var rest = Substring(spec)
+        var user: String?
+        if let at = rest.lastIndex(of: "@") {
+            user = String(rest[..<at])
+            rest = rest[rest.index(after: at)...]
+        }
+        var port: Int?
+        if rest.hasPrefix("["), let close = rest.firstIndex(of: "]") {
+            let host = String(rest[rest.index(after: rest.startIndex)..<close])
+            let after = rest[rest.index(after: close)...]
+            if after.hasPrefix(":") { port = Int(after.dropFirst()) }
+            return (user, host, port)
+        }
+        if let colon = rest.lastIndex(of: ":"), rest.firstIndex(of: ":") == colon {
+            port = Int(rest[rest.index(after: colon)...])
+            rest = rest[..<colon]
+        }
+        return (user, String(rest), port)
     }
 
     /// A pattern that names a single host (no wildcards or negation).

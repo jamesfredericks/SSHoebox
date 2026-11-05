@@ -164,3 +164,36 @@ final class HostOptionsTests: XCTestCase {
         XCTAssertEqual(records.snippets, [])
     }
 }
+
+final class SSHConfigConnectionOptionsTests: XCTestCase {
+    func testReadsProxyJumpForwardsAndKeepAlive() {
+        let config = """
+        Host *
+            ServerAliveInterval 45
+        Host app
+            HostName 10.0.0.5
+            ProxyJump admin@bastion:2222,inner
+            LocalForward 8080 localhost:80
+            LocalForward 127.0.0.1:5433 db:5432
+        Host bastion
+            HostName bastion.example
+            ProxyJump none
+        Host app
+            LocalForward 9000 extra:90
+        """
+        let hosts = SSHConfigParser.parse(string: config)
+        let app = hosts.first { $0.alias == "app" }
+        XCTAssertEqual(app?.proxyJump, ["admin@bastion:2222", "inner"])
+        XCTAssertEqual(app?.localForwards.map(\.summary), ["8080 → localhost:80", "5433 → db:5432", "9000 → extra:90"],
+                       "LocalForward accumulates across blocks")
+        XCTAssertEqual(app?.serverAliveInterval, 45)
+        XCTAssertEqual(hosts.first { $0.alias == "bastion" }?.proxyJump, [])
+    }
+
+    func testJumpSpecs() {
+        XCTAssertTrue(SSHConfigParser.parseJumpSpec("admin@bastion:2222") == ("admin", "bastion", 2222))
+        XCTAssertTrue(SSHConfigParser.parseJumpSpec("bastion") == (nil, "bastion", nil))
+        XCTAssertTrue(SSHConfigParser.parseJumpSpec("u@[fe80::1]:22") == ("u", "fe80::1", 22))
+        XCTAssertTrue(SSHConfigParser.parseJumpSpec("fe80::1") == (nil, "fe80::1", nil), "bare IPv6 has no port")
+    }
+}

@@ -5,7 +5,7 @@ struct MainView: View {
     @ObservedObject var viewModel: VaultViewModel
     @ObservedObject private var themeManager = ThemeManager.shared
     @EnvironmentObject private var sessionRegistry: TerminalSessionRegistry
-    @State private var selection: SidebarItem? = .hosts
+    @EnvironmentObject private var navigator: AppNavigator
 
     enum SidebarItem: Hashable {
         case hosts
@@ -17,7 +17,7 @@ struct MainView: View {
 
     var body: some View {
         NavigationSplitView {
-            List(selection: $selection) {
+            List(selection: $navigator.sidebar) {
                 Section("Vault") {
                     NavigationLink(value: SidebarItem.hosts) {
                         Label("Hosts", systemImage: "server.rack")
@@ -53,8 +53,8 @@ struct MainView: View {
             .preferredColorScheme(themeManager.currentTheme.colorScheme)
             .tint(DesignSystem.Colors.accent)
         } detail: {
-            NavigationStack {
-                switch selection {
+            NavigationStack(path: $navigator.hostPath) {
+                switch navigator.sidebar {
                 case .hosts:
                     if let deps = viewModel.getDependencies() {
                         HostListView(dbManager: deps.0, vaultKey: deps.1)
@@ -78,6 +78,12 @@ struct MainView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .automatic) {
+                    Button { navigator.showQuickConnect = true } label: {
+                        Label("Quick Connect", systemImage: "bolt.horizontal.circle")
+                    }
+                    .help("Quick Connect (⌘K)")
+                }
+                ToolbarItem(placement: .automatic) {
                     Button { viewModel.lock() } label: {
                         Label("Lock Vault", systemImage: "lock.fill")
                     }
@@ -90,6 +96,18 @@ struct MainView: View {
             let registry = sessionRegistry
             viewModel.activeSessionCount = { registry.totalActiveConnections }
             ClipboardManager.shared.clipboardClearTimeout = ClipboardManager.savedClearTimeout
+            if let deps = viewModel.getDependencies() {
+                navigator.vaultDidUnlock(dbManager: deps.0, vaultKey: deps.1)
+            }
+        }
+        .onChange(of: navigator.sidebar) { _, item in
+            if item != .hosts { navigator.hostPath = [] }
+        }
+        .sheet(isPresented: $navigator.showQuickConnect) {
+            if let deps = viewModel.getDependencies() {
+                QuickConnectView(dbManager: deps.0, vaultKey: deps.1)
+                    .environmentObject(navigator)
+            }
         }
         // Offered after the first unlock of a vault without Touch ID. Attached here, not to the
         // unlock screen, because that screen is gone as soon as the vault opens.

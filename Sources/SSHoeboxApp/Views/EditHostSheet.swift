@@ -14,6 +14,7 @@ struct EditHostSheet: View {
     @State private var protocolType: String
     @State private var user: String
     @State private var selectedGroupId: String?
+    @State private var options: HostOptions
     
     init(viewModel: HostsViewModel, host: SavedHost, vaultKey: SymmetricKey) {
         self.viewModel = viewModel
@@ -26,6 +27,13 @@ struct EditHostSheet: View {
         _protocolType = State(initialValue: host.protocolType)
         _user = State(initialValue: host.decryptedUser(using: vaultKey))
         _selectedGroupId = State(initialValue: host.groupId)
+        _options = State(initialValue: host.decryptedOptions(using: vaultKey))
+    }
+
+    private var jumpCandidates: [(id: String, name: String)] {
+        viewModel.hosts.filter { $0.id != host.id }
+            .map { ($0.id, viewModel.name(of: $0)) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
     
     var body: some View {
@@ -59,6 +67,8 @@ struct EditHostSheet: View {
                         }
                     }
                 }
+
+                HostOptionsSections(options: $options, jumpCandidates: jumpCandidates)
             }
             .formStyle(.grouped)
             .navigationTitle("Edit Host")
@@ -76,15 +86,16 @@ struct EditHostSheet: View {
                                 port: portInt,
                                 protocolType: protocolType,
                                 user: user,
-                                groupId: selectedGroupId
+                                groupId: selectedGroupId,
+                                options: options
                             )
                             dismiss()
                         }
                     }
-                    .disabled(name.isEmpty || hostname.isEmpty)
+                    .disabled(name.isEmpty || hostname.isEmpty || !HostOptionsSections.forwardsAreValid(options))
                 }
             }
         }
-        .frame(minWidth: 400, minHeight: 400)
+        .frame(minWidth: 520, minHeight: 560)
     }
 }

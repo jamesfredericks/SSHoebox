@@ -6,6 +6,7 @@ struct HostListView: View {
     @ObservedObject private var themeManager = ThemeManager.shared
     @StateObject private var viewModel: HostsViewModel
     @EnvironmentObject private var sessionRegistry: TerminalSessionRegistry
+    @EnvironmentObject private var navigator: AppNavigator
     let dbManager: DatabaseManager
     let vaultKey: SymmetricKey
     @State private var showingAddHost = false
@@ -13,6 +14,7 @@ struct HostListView: View {
     @State private var showingImportSSHConfig = false
     @State private var showingImportCredentials = false
     @State private var hostToDelete: SavedHost?
+    @State private var hostToEdit: SavedHost?
 
     init(dbManager: DatabaseManager, vaultKey: SymmetricKey) {
         self.dbManager = dbManager
@@ -53,6 +55,10 @@ struct HostListView: View {
                     if grouped.isEmpty {
                         emptyState
                     } else {
+                        let favorites = viewModel.favoriteHosts
+                        if !favorites.isEmpty {
+                            favoritesSection(favorites)
+                        }
                         ForEach(Array(grouped.enumerated()), id: \.offset) { _, section in
                             groupSection(section)
                         }
@@ -96,6 +102,20 @@ struct HostListView: View {
         }
         .sheet(isPresented: $showingAddHost, onDismiss: { viewModel.fetchHosts() }) {
             AddHostSheet(viewModel: viewModel)
+        }
+        .sheet(item: $navigator.pendingNewHost, onDismiss: { viewModel.fetchHosts() }) { draft in
+            AddHostSheet(viewModel: viewModel, draft: draft)
+        }
+        .sheet(item: $hostToEdit, onDismiss: { viewModel.fetchHosts() }) { host in
+            EditHostSheet(viewModel: viewModel, host: host, vaultKey: vaultKey)
+        }
+        .navigationDestination(for: AppNavigator.HostRoute.self) { route in
+            if let host = viewModel.hosts.first(where: { $0.id == route.hostId }) {
+                HostDetailView(host: host, dbManager: dbManager, vaultKey: vaultKey, hostsViewModel: viewModel)
+            } else {
+                EmptyStateView(title: "Host Not Found", description: "This host was deleted.",
+                               systemImage: "questionmark.folder")
+            }
         }
         .sheet(isPresented: $showingManageGroups, onDismiss: { viewModel.fetchHosts() }) {
             ManageGroupsSheet(viewModel: viewModel)
@@ -159,21 +179,100 @@ struct HostListView: View {
             // Host cards (hidden when collapsed)
             if !isCollapsed {
                 ForEach(section.hosts) { host in
-                    NavigationLink {
-                        HostDetailView(host: host, dbManager: dbManager, vaultKey: vaultKey, hostsViewModel: viewModel)
-                    } label: {
-                        HostCard(host: host, vaultKey: vaultKey)
-                    }
-                    .buttonStyle(.plain)
-                    // .swipeActions only works on List rows, not inside this LazyVStack.
-                    .contextMenu {
-                        Button(role: .destructive) {
-                            hostToDelete = host
-                        } label: {
-                            Label("Delete…", systemImage: "trash")
-                        }
-                    }
+                    hostLink(host)
                 }
+            }
+        }
+    }
+
+    private func favoritesSection(_ hosts: [SavedHost]) -> some View {
+        let isCollapsed = viewModel.collapsedGroups.contains("__favorites__")
+        return VStack(alignment: .leading, spacing: DesignSystem.Spacing.medium) {
+            Button {
+                viewModel.toggleCollapse(groupId: "__favorites__")
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+                        .font(.caption2)
+                        .foregroundStyle(DesignSystem.Colors.textSecondary)
+                    Image(systemName: "star.fill")
+                        .font(.caption)
+                        .foregroundStyle(Color.yellow.opacity(0.85))
+                    Text("Favorites")
+                        .font(DesignSystem.Typography.label())
+                        .foregroundStyle(DesignSystem.Colors.textSecondary)
+                    Spacer()
+                }
+            }
+            .buttonStyle(.plain)
+            .padding(.top, DesignSystem.Spacing.large)
+            if !isCollapsed {
+                ForEach(hosts) { host in
+                    hostLink(host)
+                }
+            }
+        }
+    }
+
+    private func hostLink(_ host: SavedHost) -> some View {
+        NavigationLink(value: AppNavigator.HostRoute(hostId: host.id)) {
+            HostCard(host: host, vaultKey: vaultKey, options: viewModel.options(for: host),
+                     jumpHostName: viewModel.options(for: host).jumpHostId.flatMap { id in
+                         viewModel.hosts.first { $0.id == id }.map(viewModel.name(of:))
+                     })
+        }
+        .buttonStyle(.plain)
+        // .swipeActions only works on List rows, not inside this LazyVStack.
+        .contextMenu {
+            Button {
+                navigator.open(hostId: host.id, action: .terminal)
+            } label: {
+                Label("Open Terminal", systemImage: "terminal")
+            }
+            Button {
+                navigator.open(hostId: host.id, action: .newTerminal)
+            } label: {
+                Label("New Terminal Tab", systemImage: "plus.rectangle.on.rectangle")
+            }
+            Button {
+                navigator.open(hostId: host.id, action: .files)
+            } label: {
+                Label("Browse Files (SFTP)", systemImage: "folder")
+            }
+            Divider()
+            Button {
+                viewModel.toggleFavorite(host)
+            } label: {
+                if viewModel.options(for: host).isFavorite {
+                    Label("Remove from Favorites", systemImage: "star.slash")
+                } else {
+                    Label("Add to Favorites", systemImage: "star")
+                }
+            }
+            Button {
+                hostToEdit = host
+            } label: {
+                Label("Edit…", systemImage: "pencil")
+            }
+            Button {
+                viewModel.duplicateHost(host)
+            } label: {
+                Label("Duplicate", systemImage: "plus.square.on.square")
+            }
+            Button {
+                let user = host.decryptedUser(using: vaultKey)
+                let link = "ssh://" + (user.isEmpty ? "" : "\(user)@") + host.decryptedHostname(using: vaultKey)
+                    + (host.port == 22 ? "" : ":\(host.port)")
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(link, forType: .string)
+            } label: {
+                Label("Copy ssh:// Link", systemImage: "link")
+            }
+            Divider()
+            Button(role: .destructive) {
+                hostToDelete = host
+            } label: {
+                Label("Delete…", systemImage: "trash")
             }
         }
     }
@@ -211,6 +310,8 @@ struct HostListView: View {
 struct HostCard: View {
     let host: SavedHost
     let vaultKey: SymmetricKey
+    var options = HostOptions()
+    var jumpHostName: String? = nil
     @State private var isHovering = false
 
     var body: some View {
@@ -227,9 +328,19 @@ struct HostCard: View {
             }
 
             VStack(alignment: .leading, spacing: DesignSystem.Spacing.tight) {
-                Text(host.decryptedName(using: vaultKey))
-                    .font(DesignSystem.Typography.heading())
-                    .foregroundStyle(DesignSystem.Colors.textPrimary)
+                HStack(spacing: 6) {
+                    Text(host.decryptedName(using: vaultKey))
+                        .font(DesignSystem.Typography.heading())
+                        .foregroundStyle(DesignSystem.Colors.textPrimary)
+                    if options.isFavorite {
+                        Image(systemName: "star.fill")
+                            .font(.caption2)
+                            .foregroundStyle(Color.yellow.opacity(0.85))
+                    }
+                    ForEach(options.tags.prefix(4), id: \.self) { tag in
+                        TagChip(tag: tag)
+                    }
+                }
 
                 HStack(spacing: DesignSystem.Spacing.tight) {
                     Image(systemName: "network")
@@ -238,6 +349,20 @@ struct HostCard: View {
                         .font(DesignSystem.Typography.mono())
                 }
                 .foregroundStyle(DesignSystem.Colors.textSecondary)
+
+                if jumpHostName != nil || !options.portForwards.isEmpty {
+                    HStack(spacing: DesignSystem.Spacing.standard) {
+                        if let jumpHostName {
+                            Label("via \(jumpHostName)", systemImage: "arrow.triangle.branch")
+                        }
+                        if !options.portForwards.isEmpty {
+                            Label("\(options.portForwards.count) tunnel\(options.portForwards.count == 1 ? "" : "s")",
+                                  systemImage: "point.3.connected.trianglepath.dotted")
+                        }
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(DesignSystem.Colors.textSecondary.opacity(0.8))
+                }
 
                 if let lastConnected = host.lastConnectedAt {
                     HStack(spacing: DesignSystem.Spacing.tight) {

@@ -1,4 +1,5 @@
 import SwiftUI
+import SSHoeboxCore
 
 struct AddHostSheet: View {
     @Environment(\.dismiss) var dismiss
@@ -10,6 +11,7 @@ struct AddHostSheet: View {
     @State private var protocolType = "ssh"
     @State private var user = ""
     @State private var selectedGroupId: String? = nil
+    @State private var options = HostOptions()
     
     // New Credential Fields
     @State private var credentialType = "none" // none, password, key
@@ -23,6 +25,21 @@ struct AddHostSheet: View {
         keyText.contains("-----BEGIN") && keyText.contains("PRIVATE KEY-----")
     }
     
+    init(viewModel: HostsViewModel, draft: AppNavigator.NewHostDraft? = nil) {
+        self.viewModel = viewModel
+        if let draft {
+            _name = State(initialValue: draft.hostname)
+            _hostname = State(initialValue: draft.hostname)
+            _port = State(initialValue: String(draft.port))
+            _user = State(initialValue: draft.user)
+        }
+    }
+
+    private var jumpCandidates: [(id: String, name: String)] {
+        viewModel.hosts.map { ($0.id, viewModel.name(of: $0)) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -54,6 +71,8 @@ struct AddHostSheet: View {
                         }
                     }
                 }
+
+                HostOptionsSections(options: $options, jumpCandidates: jumpCandidates)
                 
                 Section("Initial Credential (Optional)") {
                     Picker("Type", selection: $credentialType) {
@@ -102,13 +121,15 @@ struct AddHostSheet: View {
                                 protocolType: protocolType,
                                 user: user,
                                 groupId: selectedGroupId,
+                                options: options,
                                 credentialType: credentialType,
                                 credentialSecret: credentialType == "password" ? password : keyText
                             )
                             dismiss()
                         }
                     }
-                    .disabled(name.isEmpty || hostname.isEmpty || (credentialType == "key" && !keyText.isEmpty && !keyLooksValid))
+                    .disabled(name.isEmpty || hostname.isEmpty || (credentialType == "key" && !keyText.isEmpty && !keyLooksValid)
+                              || !HostOptionsSections.forwardsAreValid(options))
                 }
             }
             .fileImporter(isPresented: $isFileImporterPresented, allowedContentTypes: [.item]) { result in
@@ -120,7 +141,7 @@ struct AddHostSheet: View {
                 }
             }
         }
-        .frame(minWidth: 400, minHeight: 500)
+        .frame(minWidth: 520, minHeight: 600)
     }
 
     /// Reads the private key's contents into the editor; the vault stores the key, not its path.

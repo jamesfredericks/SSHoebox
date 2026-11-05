@@ -6,6 +6,7 @@ import SSHoeboxCore
 struct MenuBarView: View {
     @ObservedObject var viewModel: VaultViewModel
     @EnvironmentObject var sessionRegistry: TerminalSessionRegistry
+    @EnvironmentObject var navigator: AppNavigator
     @Environment(\.openWindow) private var openWindow
 
     /// Brings the main window forward, reopening it if it was closed.
@@ -52,6 +53,11 @@ struct MenuBarView: View {
 
             if viewModel.isUnlocked {
                 // Quick actions
+                MenuBarButton(icon: "bolt.horizontal.circle", label: "Quick Connect…") {
+                    showMainWindow()
+                    navigator.showQuickConnect = true
+                }
+
                 MenuBarButton(icon: "macwindow", label: "Open SSHoebox") {
                     showMainWindow()
                 }
