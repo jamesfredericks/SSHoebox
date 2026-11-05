@@ -62,6 +62,9 @@ struct SSHoeboxApp: App {
                 OpenLoginLogCommand()
                 Divider()
             }
+            CommandGroup(replacing: .textEditing) {
+                FindCommands()
+            }
             CommandGroup(after: .textEditing) {
                 Button("Increase Font Size") {
                     ThemeManager.shared.increaseFontSize()
@@ -88,6 +91,27 @@ struct SSHoeboxApp: App {
                 .environmentObject(navigator)
         }
         .menuBarExtraStyle(.window)
+    }
+}
+
+/// Edit → Find in the terminal (or any text view with focus). SwiftTerm handles the standard
+/// text-finder actions, which read the action from the sending menu item's tag.
+private struct FindCommands: View {
+    var body: some View {
+        Button("Find…") { send(.showFindInterface) }
+            .keyboardShortcut("f", modifiers: .command)
+        Button("Find Next") { send(.nextMatch) }
+            .keyboardShortcut("g", modifiers: .command)
+        Button("Find Previous") { send(.previousMatch) }
+            .keyboardShortcut("g", modifiers: [.command, .shift])
+        Button("Use Selection for Find") { send(.setSearchString) }
+            .keyboardShortcut("e", modifiers: .command)
+    }
+
+    private func send(_ action: NSTextFinder.Action) {
+        let item = NSMenuItem()
+        item.tag = action.rawValue
+        NSApp.sendAction(#selector(NSResponder.performTextFinderAction(_:)), to: nil, from: item)
     }
 }
 

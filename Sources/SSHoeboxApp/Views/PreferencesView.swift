@@ -8,6 +8,8 @@ struct PreferencesView: View {
     @AppStorage(VaultViewModel.deferAutoLockForSessionsKey) private var deferAutoLockForSessions = false
     @AppStorage("terminalAllowOSC52") private var allowOSC52 = false
     @AppStorage(SSHSessionOptions.keepAliveDefaultsKey) private var keepAliveInterval = SSHSessionOptions.defaultKeepAliveInterval
+    @AppStorage(SessionRecorder.autoRecordDefaultsKey) private var recordAllSessions = false
+    @AppStorage(SessionRecorder.directoryDefaultsKey) private var recordingsDirectory = ""
     @State private var clipboardClearTimeout: Int = 30
     @State private var isBiometricEnabled: Bool = false
     @State private var showBiometricVaultLockedAlert: Bool = false
@@ -198,6 +200,31 @@ struct PreferencesView: View {
                     .foregroundStyle(DesignSystem.Colors.textSecondary)
             } footer: {
                 Text("Keep-alives stop firewalls and NAT from dropping idle sessions, and notice a dead connection: after three go unanswered, the session is closed so you can reconnect. Hosts can override this in Edit Host. An ssh:// link opens the matching saved host, or a new host filled in from the link.")
+                    .foregroundStyle(DesignSystem.Colors.textSecondary)
+            }
+
+            Section {
+                Toggle("Record every terminal session", isOn: $recordAllSessions)
+                HStack {
+                    Text("Recordings folder")
+                        .foregroundStyle(DesignSystem.Colors.textPrimary)
+                    Spacer()
+                    Text(SessionRecorder.directory.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
+                        .foregroundStyle(DesignSystem.Colors.textSecondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Button("Choose…") { chooseRecordingsFolder() }
+                    Button("Show") {
+                        let folder = SessionRecorder.directory
+                        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                        NSWorkspace.shared.open(folder)
+                    }
+                }
+            } header: {
+                Text("Session Recording")
+                    .foregroundStyle(DesignSystem.Colors.textSecondary)
+            } footer: {
+                Text("Recordings are plain-text transcripts of what the terminal showed, readable only by your Mac account. They're not encrypted and stay outside the vault, so anything a server printed (including secrets it displayed) is in them. Input the server doesn't echo, such as passwords, isn't recorded. Any session can also be recorded from its record button.")
                     .foregroundStyle(DesignSystem.Colors.textSecondary)
             }
 
@@ -438,6 +465,18 @@ extension PreferencesView {
         guard let url = URL(string: "ssh://localhost"),
               let handler = NSWorkspace.shared.urlForApplication(toOpen: url) else { return false }
         return handler.standardizedFileURL == Bundle.main.bundleURL.standardizedFileURL
+    }
+
+    func chooseRecordingsFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Choose"
+        panel.directoryURL = SessionRecorder.directory
+        if panel.runModal() == .OK, let url = panel.url {
+            recordingsDirectory = url.path
+        }
     }
 
     func makeDefaultSSHHandler() {

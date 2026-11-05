@@ -9,6 +9,7 @@ struct MainView: View {
 
     enum SidebarItem: Hashable {
         case hosts
+        case sessions
         case generator
         case backups
         case preferences
@@ -22,6 +23,11 @@ struct MainView: View {
                     NavigationLink(value: SidebarItem.hosts) {
                         Label("Hosts", systemImage: "server.rack")
                             .foregroundColor(DesignSystem.Colors.textPrimary)
+                    }
+                    NavigationLink(value: SidebarItem.sessions) {
+                        Label("Sessions", systemImage: "rectangle.split.3x3")
+                            .foregroundColor(DesignSystem.Colors.textPrimary)
+                            .badge(sessionRegistry.allSessions.count)
                     }
                 }
 
@@ -61,6 +67,8 @@ struct MainView: View {
                     } else {
                         ProgressView()
                     }
+                case .sessions:
+                    SessionsWorkspaceView()
                 case .generator:
                     GeneratorView()
                 case .backups:

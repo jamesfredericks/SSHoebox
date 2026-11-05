@@ -12,6 +12,8 @@ import Combine
 @MainActor
 class TerminalSessionRegistry: ObservableObject {
     private var stores: [String: TerminalSessionStore] = [:]
+    /// Sessions whose typed input goes to all of them (see `broadcast(_:)`).
+    @Published private(set) var broadcastIDs: Set<UUID> = []
     /// Per store: republishes session connection-state changes so views showing
     /// `totalActiveConnections` (e.g. the menu bar) stay current.
     private var stateObservers: [String: AnyCancellable] = [:]
@@ -27,6 +29,36 @@ class TerminalSessionRegistry: ObservableObject {
         }
     }
 
+    /// Every open terminal session, grouped by host in the order the hosts were opened.
+    var allSessions: [TerminalSession] {
+        storeOrder.compactMap { stores[$0] }.flatMap(\.sessions)
+    }
+    private var storeOrder: [String] = []
+
+    // MARK: - Broadcast
+
+    func isBroadcasting(_ session: TerminalSession) -> Bool {
+        broadcastIDs.contains(session.id)
+    }
+
+    func setBroadcast(_ on: Bool, for sessions: [TerminalSession]) {
+        for session in sessions {
+            if on { broadcastIDs.insert(session.id) } else { broadcastIDs.remove(session.id) }
+        }
+    }
+
+    /// Sends input to every session in the broadcast group.
+    func broadcast(_ data: Data) {
+        for session in allSessions where broadcastIDs.contains(session.id) {
+            session.manager.send(data)
+        }
+    }
+
+    private func pruneBroadcast() {
+        let alive = Set(allSessions.map(\.id))
+        broadcastIDs.formIntersection(alive)
+    }
+
     /// Returns the existing store for a host, or creates one if none exists.
     /// An existing store picks up `host` as passed, so edits to the host apply to new sessions.
     func store(for host: SavedHost, dbManager: DatabaseManager, vaultKey: SymmetricKey) -> TerminalSessionStore {
@@ -35,8 +67,13 @@ class TerminalSessionRegistry: ObservableObject {
             return existing
         }
         let newStore = TerminalSessionStore(host: host, dbManager: dbManager, vaultKey: vaultKey)
+        newStore.registry = self
         stores[host.id] = newStore
+        storeOrder.append(host.id)
         stateObservers[host.id] = newStore.$sessions
+            .handleEvents(receiveOutput: { [weak self] _ in
+                DispatchQueue.main.async { self?.pruneBroadcast() }
+            })
             .map { sessions in
                 Publishers.MergeMany(sessions.map { $0.manager.$connectionState.map { _ in () } })
                     .prepend(())
@@ -53,8 +90,15 @@ class TerminalSessionRegistry: ObservableObject {
             store.disconnectAll()
         }
         stores.removeValue(forKey: hostId)
+        storeOrder.removeAll { $0 == hostId }
         stateObservers.removeValue(forKey: hostId)
+        pruneBroadcast()
         objectWillChange.send()
+    }
+
+    /// The store of an open host, if any.
+    func existingStore(for hostId: String) -> TerminalSessionStore? {
+        stores[hostId]
     }
 
     /// Ends every session and drops every store, releasing their copies of the vault key
@@ -62,7 +106,9 @@ class TerminalSessionRegistry: ObservableObject {
     func removeAll() {
         stores.values.forEach { $0.disconnectAll() }
         stores.removeAll()
+        storeOrder.removeAll()
         stateObservers.removeAll()
+        broadcastIDs.removeAll()
         objectWillChange.send()
     }
 }
@@ -73,9 +119,13 @@ class TerminalSessionRegistry: ObservableObject {
 class TerminalSessionStore: ObservableObject {
     @Published var sessions: [TerminalSession] = []
     @Published var selectedSessionId: UUID?
+    private var nextSessionNumber = 0
 
     /// Read at connect time, so new sessions use the latest saved address and user.
     fileprivate(set) var host: SavedHost
+    weak var registry: TerminalSessionRegistry?
+    /// How this host's sessions are laid out: one at a time in tabs, or all side by side.
+    @Published var isSplit = false
     private let dbManager: DatabaseManager
     private let vaultKey: SymmetricKey
 
@@ -90,12 +140,15 @@ class TerminalSessionStore: ObservableObject {
     func openNewSession() {
         let manager = SSHSessionManager()
         manager.knownHostRepository = KnownHostRepository(dbManager: dbManager)
-        let sessionNumber = sessions.count + 1
+        nextSessionNumber += 1
         let session = TerminalSession(
-            id: UUID(),
-            title: "Terminal \(sessionNumber)",
+            hostId: host.id,
+            hostName: host.decryptedName(using: vaultKey),
+            title: "Terminal \(nextSessionNumber)",
             manager: manager
         )
+        session.registry = registry
+        if SessionRecorder.recordsAutomatically { session.startRecording() }
         sessions.append(session)
         selectedSessionId = session.id
 
@@ -128,7 +181,7 @@ class TerminalSessionStore: ObservableObject {
     }
 
     func closeSession(_ session: TerminalSession) {
-        session.manager.disconnect()
+        session.close()
         sessions.removeAll { $0.id == session.id }
         if selectedSessionId == session.id {
             selectedSessionId = sessions.last?.id
@@ -140,7 +193,7 @@ class TerminalSessionStore: ObservableObject {
     }
 
     func disconnectAll() {
-        sessions.forEach { $0.manager.disconnect() }
+        sessions.forEach { $0.close() }
         sessions.removeAll()
         selectedSessionId = nil
     }
@@ -160,10 +213,12 @@ class TerminalSessionStore: ObservableObject {
     }
 }
 
-// MARK: - Session Model
+extension TerminalSessionStore {
+    /// Snippets for this host (its own, then the global ones), decrypted.
+    func snippets() -> [(id: String, name: String, command: String, isGlobal: Bool)] {
+        let stored = (try? SnippetRepository(dbManager: dbManager).snippets(forHost: host.id)) ?? []
+        return stored.map { ($0.id, $0.decryptedName(using: vaultKey), $0.decryptedCommand(using: vaultKey), $0.hostId == nil) }
+    }
 
-struct TerminalSession: Identifiable {
-    let id: UUID
-    let title: String
-    let manager: SSHSessionManager
+    var snippetContext: (dbManager: DatabaseManager, vaultKey: SymmetricKey) { (dbManager, vaultKey) }
 }

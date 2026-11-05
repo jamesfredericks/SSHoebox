@@ -3,97 +3,60 @@ import SwiftTerm
 import AppKit
 import SSHoeboxCore
 
-/// SwiftUI wrapper for SwiftTerm's TerminalView (NSView-based).
-/// Handles remote SSH session I/O — forwards SSH output to the terminal display
-/// and user keystrokes back to the SSH session.
-struct RemoteTerminalView: NSViewRepresentable {
+/// Shows a session's terminal view. The view belongs to the session (see `TerminalSession`),
+/// so this only hosts it: whichever host appeared last takes it, and AppKit moves it out of
+/// any previous one.
+struct SessionTerminalHost: NSViewRepresentable {
+    @ObservedObject var session: TerminalSession
+    /// Give it keyboard focus when it appears (the selected tab, or the clicked tile).
+    var focused = false
 
-    @ObservedObject var session: SSHSessionManager
-    @ObservedObject var themeManager: ThemeManager = .shared
-    var font: NSFont { NSFont.monospacedSystemFont(ofSize: themeManager.terminalFontSize, weight: .regular) }
-    
-    func makeNSView(context: Context) -> TerminalView {
-        let termView = TerminalView(frame: .zero)
-        termView.font = font
-        // Dark terminal colors matching app theme
-        termView.nativeForegroundColor = NSColor(calibratedRed: 0.85, green: 0.85, blue: 0.85, alpha: 1.0)
-        termView.nativeBackgroundColor = NSColor(calibratedRed: 0.05, green: 0.05, blue: 0.08, alpha: 1.0)
-        termView.terminalDelegate = context.coordinator
-        context.coordinator.termView = termView
-        
-        // Wire session output → terminal display
-        session.onOutput = { [weak coordinator = context.coordinator] data in
-            DispatchQueue.main.async {
-                coordinator?.termView?.feed(byteArray: ArraySlice(data))
-            }
-        }
-        
-        session.onDisconnect = { [weak coordinator = context.coordinator] in
-            DispatchQueue.main.async {
-                let msg = "\r\n\r\n\u{1B}[33m[Session ended. Close this tab to continue.]\u{1B}[0m\r\n"
-                coordinator?.termView?.feed(text: msg)
-            }
-        }
-        
-        return termView
+    final class Coordinator {
+        var wasFocused = false
     }
-    
-    func updateNSView(_ nsView: TerminalView, context: Context) {
-        nsView.font = font
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> TerminalContainerView {
+        let container = TerminalContainerView()
+        container.adopt(session.terminal.view)
+        return container
     }
-    
-    func makeCoordinator() -> Coordinator {
-        Coordinator(session: session)
+
+    func updateNSView(_ container: TerminalContainerView, context: Context) {
+        container.adopt(session.terminal.view)
+        // Only when it becomes the focused one, so redraws don't take focus from text fields.
+        if focused && !context.coordinator.wasFocused {
+            let terminal = session.terminal
+            DispatchQueue.main.async { terminal.focus() }
+        }
+        context.coordinator.wasFocused = focused
     }
-    
-    // MARK: - Coordinator
-    
-    class Coordinator: NSObject, TerminalViewDelegate {
-        var session: SSHSessionManager
-        weak var termView: TerminalView?
-        
-        init(session: SSHSessionManager) {
-            self.session = session
+}
+
+/// Holds a terminal view that may move between containers.
+final class TerminalContainerView: NSView {
+    private weak var terminalView: NSView?
+
+    func adopt(_ view: NSView) {
+        terminalView = view
+        guard view.superview !== self else { return }
+        view.removeFromSuperview()
+        view.frame = bounds
+        view.autoresizingMask = [.width, .height]
+        addSubview(view)
+    }
+
+    /// Takes the terminal back when shown again, in case another container held it meanwhile.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil, let terminalView, terminalView.superview !== self {
+            adopt(terminalView)
         }
-        
-        // MARK: TerminalViewDelegate — required methods
-        
-        func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
-            guard newCols > 0, newRows > 0 else { return }
-            Task { @MainActor in session.resize(cols: newCols, rows: newRows) }
-        }
-        
-        func setTerminalTitle(source: TerminalView, title: String) {}
-        
-        func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
-        
-        func scrolled(source: TerminalView, position: Double) {}
-        
-        func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
-            if let url = URL(string: link) {
-                NSWorkspace.shared.open(url)
-            }
-        }
-        
-        func bell(source: TerminalView) {
-            NSSound.beep()
-        }
-        
-        func clipboardCopy(source: TerminalView, content: Data) {
-            if let str = String(data: content, encoding: .utf8) {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(str, forType: .string)
-            }
-        }
-        
-        func iTermContent(source: TerminalView, content: ArraySlice<UInt8>) {}
-        
-        func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
-        
-        /// Forward user keystrokes to the SSH session
-        func send(source: TerminalView, data: ArraySlice<UInt8>) {
-            let bytes = Array(data)
-            Task { @MainActor in session.send(Data(bytes)) }
-        }
+    }
+
+    override func layout() {
+        super.layout()
+        terminalView?.frame = bounds
     }
 }

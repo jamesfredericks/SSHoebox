@@ -25,6 +25,8 @@ enum SyncedSettings {
         "clipboardClearTimeout": .int,
         "terminalAllowOSC52": .bool,
         "isAgentEnabled": .bool,
+        SSHSessionOptions.keepAliveDefaultsKey: .int,
+        SessionRecorder.autoRecordDefaultsKey: .bool,
     ]
 
     /// This Mac's values. Settings it has never stored are left out.
