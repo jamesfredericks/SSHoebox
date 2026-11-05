@@ -230,6 +230,33 @@ public struct DatabaseManager {
             }
         }
 
+        // Connection options per host (jump host, keep-alive, port forwards, startup command,
+        // tags, favorite) as one encrypted JSON blob, and saved command snippets. Snippets sync
+        // like the other tables, so they get the same tombstone triggers as v8.
+        migrator.registerMigration("v9") { db in
+            try db.alter(table: "host") { t in
+                t.add(column: "encryptedOptions", .blob)
+            }
+            try db.create(table: "snippet") { t in
+                t.column("id", .text).primaryKey()
+                t.column("hostId", .text).references("host", onDelete: .cascade)
+                t.column("name", .text).notNull()
+                t.column("command", .text).notNull()
+                t.column("sortOrder", .integer).notNull().defaults(to: 0)
+                t.column("createdAt", .datetime).notNull()
+                t.column("updatedAt", .datetime).notNull()
+            }
+            try db.execute(sql: """
+                CREATE TRIGGER snippet_syncTombstone AFTER DELETE ON snippet BEGIN
+                    INSERT OR REPLACE INTO syncTombstone (tableName, recordId, deletedAt)
+                    VALUES ('snippet', OLD.id, strftime('%Y-%m-%d %H:%M:%f', 'now'));
+                END;
+                CREATE TRIGGER snippet_syncRevive AFTER INSERT ON snippet BEGIN
+                    DELETE FROM syncTombstone WHERE tableName = 'snippet' AND recordId = NEW.id;
+                END
+                """)
+        }
+
         return migrator
     }
 }

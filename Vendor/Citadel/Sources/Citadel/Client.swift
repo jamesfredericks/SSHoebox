@@ -195,8 +195,12 @@ public final class SSHClient {
         )
     }
 
+    /// Connects to another SSH server through this one (`ssh -J`), over a direct-tcpip channel.
+    ///
+    /// SSHoebox patch: like `SSHClientSession.connect`, a failed or timed-out login closes the
+    /// tunnel channel, and cancelling the calling task abandons the handshake.
     public func jump(to settings: SSHClientSettings) async throws -> SSHClient {
-        let originatorAddress = try SocketAddress(ipAddress: "fe80::1", port: 22)
+        let originatorAddress = try SocketAddress(ipAddress: "127.0.0.1", port: 0)
         let inboundChannelHandler = SSHClientInboundChannelHandler()
         let channel = try await self.createDirectTCPIPChannel(
             using: SSHChannelType.DirectTCPIP(
@@ -211,22 +215,43 @@ public final class SSHClient {
                 settings: settings
             )
         }
-        
-        let sshHandler = try await channel.pipeline.handler(type: NIOSSHHandler.self).get()
-        let handshakeHandler = try await channel.pipeline.handler(type: ClientHandshakeHandler.self).get()
-        let session = try await handshakeHandler.authenticated.map {
+
+        let session = channel.pipeline.handler(type: ClientHandshakeHandler.self).flatMap { handshakeHandler in
+            handshakeHandler.authenticated
+        }.flatMap {
+            channel.pipeline.handler(type: NIOSSHHandler.self)
+        }.map { sshHandler in
             SSHClientSession(channel: channel, inboundChannelHandler: inboundChannelHandler, sshHandler: sshHandler)
-        }.get()
+        }.flatMapError { error in
+            channel.close(promise: nil)
+            return channel.eventLoop.makeFailedFuture(error)
+        }
+
+        let authenticated = try await withTaskCancellationHandler {
+            try await session.get()
+        } onCancel: {
+            channel.close(promise: nil)
+        }
 
         return SSHClient(
-            session: session,
+            session: authenticated,
             authenticationMethod: settings.authenticationMethod(),
             hostKeyValidator: settings.hostKeyValidator,
             algorithms: settings.algorithms,
             protocolOptions: settings.protocolOptions
         )
     }
-    
+
+    /// SSHoebox patch: sends one `keepalive@openssh.com` request and waits for the server's
+    /// answer (see `NIOSSHHandler.sendKeepAlive`). Throws if the connection is gone.
+    public func sendKeepAlive() async throws {
+        try await eventLoop.flatSubmit { [eventLoop, sshHandler = self.session.sshHandler] in
+            let promise = eventLoop.makePromise(of: Void.self)
+            sshHandler.value.sendKeepAlive(promise: promise)
+            return promise.futureResult
+        }.get()
+    }
+
     /// Connects to an SSH server.
     /// - Parameters:
     ///  - channel: The channel to use for the connection.

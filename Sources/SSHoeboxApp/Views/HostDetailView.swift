@@ -284,46 +284,12 @@ struct HostDetailView: View {
     @MainActor
     private func connectSFTP() async {
         guard sftpManager.connectionState == .disconnected else { return }
-
         sftpManager.knownHostRepository = KnownHostRepository(dbManager: dbManager)
-
-        let hostname   = host.decryptedHostname(using: vaultKey)
-        let defaultUser = host.decryptedUser(using: vaultKey)
-
-        viewModel.fetchCredentials()
-
-        // Prefer password credential; fall back to key
-        if let pwCred = viewModel.credentials.first(where: { $0.type == "password" }) {
-            let user = {
-                let u = pwCred.decryptedUsername(using: vaultKey)
-                return u.isEmpty ? defaultUser : u
-            }()
-            if let secret = viewModel.decrypt(credential: pwCred) {
-                await sftpManager.connect(host: hostname, port: host.port, username: user, password: secret)
-                return
-            }
-        }
-
-        if let keyCred = viewModel.credentials.first(where: { $0.type == "key" }) {
-            let user = {
-                let u = keyCred.decryptedUsername(using: vaultKey)
-                return u.isEmpty ? defaultUser : u
-            }()
-            if let pem = viewModel.decrypt(credential: keyCred) {
-                await sftpManager.connect(host: hostname, port: host.port, username: user, pemKey: pem)
-                return
-            }
-        }
-
-        if let agentCred = viewModel.credentials.first(where: { $0.type == SSHAgentKeyReference.credentialType }) {
-            let user = {
-                let u = agentCred.decryptedUsername(using: vaultKey)
-                return u.isEmpty ? defaultUser : u
-            }()
-            if let agentKey = viewModel.agentKey(for: agentCred) {
-                await sftpManager.connect(host: hostname, port: host.port, username: user, agentKey: agentKey)
-                return
-            }
+        do {
+            let plan = try HostConnectionPlanner(dbManager: dbManager, vaultKey: vaultKey).plan(for: host)
+            await sftpManager.connect(plan.target, via: plan.jumps, options: plan.options)
+        } catch {
+            sftpManager.errorMessage = error.localizedDescription
         }
     }
 

@@ -226,7 +226,7 @@ struct SessionStateOverlay: View {
             Text("Key Passphrase Required")
                 .font(.title3)
                 .foregroundStyle(DesignSystem.Colors.textPrimary)
-            Text("This private key is encrypted. Enter the passphrase to continue.")
+            Text("The private key for \(manager.passphraseChallenge?.keyOwner.endpoint ?? "this host") is encrypted. Enter the passphrase to continue.")
                 .font(DesignSystem.Typography.label())
                 .foregroundStyle(DesignSystem.Colors.textSecondary)
                 .multilineTextAlignment(.center)

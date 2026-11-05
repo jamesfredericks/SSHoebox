@@ -301,6 +301,33 @@ extension NIOSSHHandler {
         self.sendGlobalRequestsIfPossible()
     }
 
+    /// SSHoebox patch: sends an OpenSSH-style keep-alive (`keepalive@openssh.com`, want reply),
+    /// like `ssh -o ServerAliveInterval`. Servers answer it with REQUEST_FAILURE (they don't
+    /// implement it), which is just as good: any answer shows the connection is alive. The
+    /// promise succeeds on either answer and fails only if the connection is gone.
+    ///
+    /// This function is **not** thread-safe: it may only be called from on the channel.
+    public func sendKeepAlive(promise: EventLoopPromise<Void>? = nil) {
+        let message = SSHMessage.GlobalRequestMessage(wantReply: true,
+                                                      type: .unknown("keepalive@openssh.com", ByteBuffer()))
+        guard let promise else {
+            self.sendGlobalRequestMessage(message)
+            return
+        }
+        let reply = promise.futureResult.eventLoop.makePromise(of: ByteBuffer?.self)
+        reply.futureResult.whenComplete { result in
+            switch result {
+            case .success:
+                promise.succeed(())
+            case .failure(let error as NIOSSHError) where error.type == .globalRequestRefused:
+                promise.succeed(())
+            case .failure(let error):
+                promise.fail(error)
+            }
+        }
+        self.sendGlobalRequestMessage(message, promise: reply)
+    }
+
     private func dropAllPendingGlobalRequests(_ error: Error) {
         while let next = self.pendingGlobalRequests.popFirst() {
             next.1?.fail(error)

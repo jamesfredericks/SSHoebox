@@ -19,7 +19,33 @@ struct VaultRecords: Codable, Equatable {
     var credentials: [Credential] = []
     var knownHosts: [KnownHost] = []
     var passwordHistory: [PasswordHistory] = []
+    /// Added in schema v9. Snapshots from older versions have none.
+    var snippets: [Snippet] = []
     var tombstones: [SyncTombstone] = []
+
+    init(groups: [HostGroup] = [], hosts: [SavedHost] = [], credentials: [Credential] = [],
+         knownHosts: [KnownHost] = [], passwordHistory: [PasswordHistory] = [], snippets: [Snippet] = [],
+         tombstones: [SyncTombstone] = []) {
+        self.groups = groups
+        self.hosts = hosts
+        self.credentials = credentials
+        self.knownHosts = knownHosts
+        self.passwordHistory = passwordHistory
+        self.snippets = snippets
+        self.tombstones = tombstones
+    }
+
+    /// Fields added after sync first shipped are optional, so older Macs' snapshots still read.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        groups = try c.decode([HostGroup].self, forKey: .groups)
+        hosts = try c.decode([SavedHost].self, forKey: .hosts)
+        credentials = try c.decode([Credential].self, forKey: .credentials)
+        knownHosts = try c.decode([KnownHost].self, forKey: .knownHosts)
+        passwordHistory = try c.decode([PasswordHistory].self, forKey: .passwordHistory)
+        snippets = try c.decodeIfPresent([Snippet].self, forKey: .snippets) ?? []
+        tombstones = try c.decode([SyncTombstone].self, forKey: .tombstones)
+    }
 
     static func read(_ db: Database) throws -> VaultRecords {
         VaultRecords(
@@ -28,6 +54,7 @@ struct VaultRecords: Codable, Equatable {
             credentials: try Credential.fetchAll(db),
             knownHosts: try KnownHost.fetchAll(db),
             passwordHistory: try PasswordHistory.fetchAll(db),
+            snippets: try Snippet.fetchAll(db),
             tombstones: try SyncTombstone.fetchAll(db)
         ).sorted()
     }
@@ -43,6 +70,7 @@ struct VaultRecords: Codable, Equatable {
             credentials: byID(credentials),
             knownHosts: byID(knownHosts),
             passwordHistory: byID(passwordHistory),
+            snippets: byID(snippets),
             tombstones: tombstones.sorted {
                 $0.tableName != $1.tableName
                     ? $0.tableName.utf8.lexicographicallyPrecedes($1.tableName.utf8)
@@ -105,6 +133,9 @@ struct VaultRecords: Codable, Equatable {
             .filter { hosts[$0.value.hostId] != nil }
         let history = latest("passwordHistory", copies.flatMap(\.passwordHistory)) { $0.changedAt }
             .filter { credentials[$0.value.credentialId] != nil }
+        // A host's own snippets go with it; global ones (no host) always stay.
+        let snippets = latest("snippet", copies.flatMap(\.snippets)) { $0.updatedAt }
+            .filter { $0.value.hostId.map { hosts[$0] != nil } ?? true }
 
         var knownHosts: [String: KnownHost] = [:]
         var trustedKeyForServer: [String: KnownHost] = [:]
@@ -122,6 +153,7 @@ struct VaultRecords: Codable, Equatable {
             "credential": Set(credentials.keys),
             "knownHost": Set(knownHosts.keys),
             "passwordHistory": Set(history.keys),
+            "snippet": Set(snippets.keys),
         ]
         let tombstones = deletedAt.values.filter { alive[$0.tableName]?.contains($0.recordId) != true }
 
@@ -131,6 +163,7 @@ struct VaultRecords: Codable, Equatable {
             credentials: Array(credentials.values),
             knownHosts: Array(knownHosts.values),
             passwordHistory: Array(history.values),
+            snippets: Array(snippets.values),
             tombstones: tombstones
         ).sorted()
     }
@@ -159,11 +192,13 @@ struct VaultRecords: Codable, Equatable {
         try Self.upsert(hosts, over: local.hosts, db)
         try Self.upsert(credentials, over: local.credentials, db)
         try Self.upsert(passwordHistory, over: local.passwordHistory, db)
+        try Self.upsert(snippets, over: local.snippets, db)
         // ...a replaced trusted key can share its hostname and port, so remove first...
         try Self.delete(local.knownHosts, keeping: knownHosts, db)
         try Self.upsert(knownHosts, over: local.knownHosts, db)
         // ...then remove children before parents.
         try Self.delete(local.passwordHistory, keeping: passwordHistory, db)
+        try Self.delete(local.snippets, keeping: snippets, db)
         try Self.delete(local.credentials, keeping: credentials, db)
         try Self.delete(local.hosts, keeping: hosts, db)
         try Self.delete(local.groups, keeping: groups, db)

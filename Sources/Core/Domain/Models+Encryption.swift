@@ -9,6 +9,8 @@ enum FieldContext {
     static func credentialUsername(_ id: String) -> String { "credential.username:\(id)" }
     static func credentialSecret(_ id: String) -> String { "credential.secret:\(id)" }
     static func historySecret(_ id: String) -> String { "passwordHistory.secret:\(id)" }
+    static func hostOptions(_ id: String) -> String { "host.options:\(id)" }
+    static func snippet(_ column: String, _ id: String) -> String { "snippet.\(column):\(id)" }
 }
 
 public extension SavedHost {
@@ -50,6 +52,29 @@ public extension SavedHost {
 
     func decryptedUser(using key: SymmetricKey) -> String {
         (try? CryptoManager.decryptString(user, using: key, context: FieldContext.host("user", id))) ?? user
+    }
+
+    /// The host's connection options, or the defaults if none are stored (or they can't be read).
+    func decryptedOptions(using key: SymmetricKey) -> HostOptions {
+        guard let encryptedOptions,
+              let json = try? CryptoManager.decrypt(encryptedOptions, using: key, context: FieldContext.hostOptions(id)),
+              let options = try? JSONDecoder().decode(HostOptions.self, from: json) else {
+            return HostOptions()
+        }
+        return options
+    }
+
+    /// Stores `options`, encrypted for this row. Callers saving the host must also set
+    /// `updatedAt` so the edit syncs.
+    mutating func setOptions(_ options: HostOptions, using key: SymmetricKey) throws {
+        if options == HostOptions() {
+            encryptedOptions = nil
+            return
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        encryptedOptions = try CryptoManager.encrypt(encoder.encode(options), using: key,
+                                                     context: FieldContext.hostOptions(id))
     }
 }
 

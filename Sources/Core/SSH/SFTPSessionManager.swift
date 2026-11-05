@@ -68,12 +68,9 @@ public class SFTPSessionManager: ObservableObject {
     @Published public var isLoading: Bool = false
     @Published public var errorMessage: String?
 
-    private var sshClient: SSHClient?
     private var sftpClient: SFTPClient?
     /// Bumped by `disconnect()` so a connect still in flight knows to close what it opened.
     private var generation = 0
-    /// The event loop of an agent-key connection, which gets its own (see `connect(agentKey:)`).
-    private var ownedGroup: MultiThreadedEventLoopGroup?
 
     /// Set before calling connect to enable TOFU host key validation.
     public var knownHostRepository: KnownHostRepository?
@@ -88,227 +85,137 @@ public class SFTPSessionManager: ObservableObject {
     }
 
     /// Set when a PEM key requires a passphrase. The UI observes this to show a prompt.
-    @Published public var passphraseChallenge: SFTPPassphraseChallenge? = nil
+    @Published public var passphraseChallenge: SSHPassphraseChallenge? = nil
+
+    /// The current connection (target plus any jump hosts).
+    private var route: SSHRoute?
+    private var keepAliveTask: Task<Void, Never>?
 
     public init() {}
 
-    // MARK: - Connect (password)
+    // MARK: - Connect
 
-    public func connect(host: String, port: Int, username: String, password: String) async {
-        let trace = newTrace()
-        trace.begin("SFTP", host: host, port: port, username: username, method: "stored password (password auth only)")
-        await doConnect(host: host, port: port, trace: trace) { settings in
-            var s = settings
-            s.authenticationMethod = { .passwordBased(username: username, password: password) }
-            return s
-        }
-    }
-
-    // MARK: - Connect (PEM key — Ed25519 or RSA)
-
-    public func connect(host: String, port: Int, username: String, pemKey: String, passphrase: String? = nil) async {
-        let pemKey = SSHKeyParser.normalizedPEM(pemKey)
-        let decryptionKey = passphrase.flatMap { $0.data(using: .utf8) }
-        let trace = newTrace()
-        trace.begin("SFTP", host: host, port: port, username: username,
-                    method: "stored private key" + (passphrase == nil ? "" : " with a passphrase from the user"))
-        let armor = pemKey.split(whereSeparator: \.isNewline).first.map(String.init) ?? "(empty)"
-        trace.info("key: format \(LoginTrace.quoted(armor))")
-
-        if let edKey = try? Curve25519.Signing.PrivateKey(sshEd25519: pemKey, decryptionKey: decryptionKey) {
-            passphraseChallenge = nil
-            let fingerprint = sshFingerprint(for: NIOSSHPrivateKey(ed25519Key: edKey).publicKey)
-            trace.info("key: ssh-ed25519 \(fingerprint); the server must list it in authorized_keys")
-            await doConnect(host: host, port: port, trace: trace) { settings in
-                var s = settings
-                s.authenticationMethod = { .ed25519(username: username, privateKey: edKey) }
-                return s
-            }
-            return
-        }
-
-        do {
-            if let rsaKey = try RSALoginKey.parse(pem: pemKey, decryptionKey: decryptionKey) {
-                passphraseChallenge = nil
-                trace.info("key: ssh-rsa \(rsaKey.bits)-bit \(rsaKey.format.rawValue) key \(sshFingerprint(forBlob: rsaKey.publicKeyBlob)); "
-                           + "logs in as \(RSALoginKey.algorithms.joined(separator: ", then ")) (never SHA-1 ssh-rsa); "
-                           + "the server must list it in authorized_keys")
-                await doConnect(host: host, port: port, trace: trace) { settings in
-                    var s = settings
-                    s.authenticationMethod = {
-                        .custom(PublicKeyAuthenticator(username: username, attempts: rsaKey.loginAttempts, trace: trace))
-                    }
-                    return s
-                }
-                return
-            }
-        } catch {
-            trace.error("key: \(LoginTrace.describe(error))")
-            connectionState = .failed("Unsupported key format")
-            errorMessage = error.localizedDescription
-            return
-        }
-
-        // Key is encrypted — request passphrase
-        if SSHKeyParser.isEncryptedKey(pemKey) {
-            if passphrase == nil {
-                trace.info("key: encrypted; asking the user for its passphrase (a new attempt follows)")
-                passphraseChallenge = SFTPPassphraseChallenge(
-                    pemKey: pemKey, host: host, port: port, username: username
-                )
-            } else {
-                trace.error("key: passphrase is incorrect, or the key isn't an Ed25519 or RSA key")
-                connectionState = .failed("Incorrect passphrase")
-                errorMessage = "The passphrase you entered is incorrect."
-            }
-            return
-        }
-
-        let fingerprint = (try? SSHKeyParser.publicKeyBlob(fromPEM: pemKey)).map(sshFingerprint(forBlob:))
-        trace.error("key: not an Ed25519 or RSA key\(fingerprint.map { " (\($0))" } ?? ""); SFTP only supports those")
-        connectionState = .failed("Unsupported key type")
-        errorMessage = "Only Ed25519 and RSA keys are currently supported for SFTP direct authentication."
-    }
-
-    // MARK: - Connect (external SSH agent)
-
-    /// Logs in with a key held by an external agent, which may ask the user to approve it.
-    public func connect(host: String, port: Int, username: String, agentKey: SSHAgentKeyReference) async {
-        let trace = newTrace()
-        trace.begin("SFTP", host: host, port: port, username: username, method: "publickey from an external SSH agent")
-        trace.info("key: \(agentKey.algorithm ?? "unknown type") \(agentKey.fingerprint) "
-                   + "\(LoginTrace.quoted(agentKey.comment)) via agent socket \(agentKey.socketPath)")
-        // The check below waits on the agent; a disconnect meanwhile cancels this connect.
-        let startGeneration = generation
-        let privateKey: NIOSSHPrivateKey
-        do {
-            privateKey = try await AgentBackedKey.checkedPrivateKey(for: agentKey)
-            guard generation == startGeneration else {
-                trace.info("cancelled while checking the agent")
-                return
-            }
-            trace.info("agent: reachable and still holds the key")
-        } catch {
-            guard generation == startGeneration else { return }
-            trace.error("agent: check failed: \(LoginTrace.describe(error))")
-            connectionState = .failed(error.localizedDescription)
-            errorMessage = error.localizedDescription
-            return
-        }
-
-        // Signing blocks the event loop while the agent waits for approval, so this connection
-        // gets a loop of its own rather than stalling others on the shared one.
-        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
-        ownedGroup = group
-        await doConnect(host: host, port: port, trace: trace) { settings in
-            var s = settings
-            s.authenticationMethod = {
-                .custom(AgentKeyAuthenticator(username: username, privateKey: privateKey, trace: trace))
-            }
-            s.group = group
-            s.loginTimeout = AgentBackedKey.loginTimeout
-            return s
-        }
-        // Failed or cancelled: nothing runs on the loop any more.
-        if sshClient == nil, ownedGroup === group {
-            ownedGroup = nil
-            Task.detached { try? await group.shutdownGracefully() }
-        }
-    }
-
-    // MARK: - Connection core
-
-    private func doConnect(
-        host: String,
-        port: Int,
-        trace: LoginTrace,
-        configure: (SSHClientSettings) -> SSHClientSettings
-    ) async {
+    /// Logs in to `target`, through `jumps` if any, and opens the SFTP subsystem. Nothing can
+    /// answer login prompts here, so a stored password only answers the password prompt.
+    public func connect(_ target: SSHLogin, via jumps: [SSHLogin] = [],
+                        options: SSHSessionOptions = SSHSessionOptions()) async {
         let gen = generation
+        passphraseChallenge = nil
         connectionState = .connecting
         isLoading = true
         errorMessage = nil
 
-        let validator: SSHHostKeyValidator
-        let capturer: CapturingHostKeyValidator?
-        do {
-            (validator, capturer) = try HostKeyTrust.validator(for: host, port: port, repository: knownHostRepository,
-                                                               trace: trace)
-        } catch {
-            connectionState = .failed(error.localizedDescription)
-            errorMessage = error.localizedDescription
-            isLoading = false
-            return
+        let trace = newTrace()
+        trace.begin("SFTP", host: target.host, port: target.port, username: target.username,
+                    method: target.auth.methodDescriptionForTrace)
+        if !jumps.isEmpty {
+            trace.info("route: through \(jumps.map(\.endpoint).joined(separator: ", then ")) (ssh -J)")
         }
-        var settings = SSHClientSettings(
-            host: host,
-            port: port,
-            authenticationMethod: { .passwordBased(username: "", password: "") },
-            hostKeyValidator: validator
-        )
-        settings.algorithms = SSHAlgorithmPolicy.algorithms
-        settings = configure(settings)
-        settings.debugObserver = trace.protocolObserver
-        trace.info("tcp: connecting to \(host):\(port), login timeout \(settings.loginTimeout.nanoseconds / 1_000_000_000)s")
 
-        var openedClient: SSHClient?
+        func fail(_ state: String, _ message: String) {
+            connectionState = .failed(state)
+            errorMessage = message
+            isLoading = false
+        }
+
+        let preparer = SSHLoginPreparer(repository: knownHostRepository, trace: trace, prompter: nil)
+        var prepared: [PreparedLogin] = []
+        for (index, login) in (jumps + [target]).enumerated() {
+            let isTarget = index == jumps.count
+            let outcome = await preparer.prepare(login)
+            guard generation == gen else {
+                trace.info("cancelled while preparing the login")
+                return
+            }
+            switch outcome {
+            case .ready(let step):
+                prepared.append(step)
+            case .needsPassphrase:
+                connectionState = .disconnected
+                isLoading = false
+                passphraseChallenge = SSHPassphraseChallenge(target: target, jumps: jumps,
+                                                             jumpIndex: isTarget ? nil : index,
+                                                             options: options, terminalSize: (80, 24))
+                return
+            case .failed(let message):
+                let prefix = isTarget ? "" : "Jump host \(login.endpoint): "
+                fail(prefix + message, prefix + message)
+                return
+            }
+        }
+
+        var openedRoute: SSHRoute?
         do {
-            let client = try await SSHClient.connect(to: settings)
-            openedClient = client
+            let route = try await SSHRoute.connect(prepared, repository: knownHostRepository, trace: trace)
+            openedRoute = route
             trace.info("auth: SUCCESS, logged in")
 
-            // Persist TOFU key on first connection
-            if let key = capturer?.capturedKey, let repo = knownHostRepository {
-                let fingerprint = sshFingerprint(for: key)
-                let openSSHStr  = String(openSSHPublicKey: key)
-                let keyType     = String(openSSHStr.split(separator: " ").first ?? "unknown")
-                let record = KnownHost(hostname: host, port: port, keyType: keyType,
-                                       keyFingerprint: fingerprint, openSSHPublicKey: openSSHStr)
-                do {
-                    try repo.save(record)
-                    trace.info("host key: stored \(keyType) \(fingerprint) as trusted (first use)")
-                } catch {
-                    // Still TOFU for this session; the key will be offered for trust again next time.
-                    trace.error("host key: could not store \(keyType) \(fingerprint): \(LoginTrace.describe(error))")
-                }
-            }
-
             trace.info("sftp: opening the sftp subsystem")
-            let sftp = try await client.openSFTP()
+            let sftp = try await route.client.openSFTP()
             let home = (try? await sftp.getRealPath(atPath: ".")) ?? "/"
 
             // The browser was closed while connecting: don't keep a connection nobody owns.
             guard generation == gen else {
                 trace.info("logged in, but the browser was closed meanwhile; closing")
                 try? await sftp.close()
-                try? await client.close()
+                await route.close()
                 return
             }
-            self.sshClient = client
+            self.route = route
             self.sftpClient = sftp
             self.connectionState = .connected
             trace.info("sftp: ready, home directory \(LoginTrace.quoted(home)); login complete")
+            if options.keepAliveInterval > 0 {
+                keepAliveTask = SSHKeepAlive.start(route: route, interval: options.keepAliveInterval,
+                                                   countMax: options.keepAliveCountMax,
+                                                   endpoint: target.endpoint) { [weak self] in
+                    await route.close()
+                    await self?.connectionLost(generation: gen)
+                }
+            }
             await loadDirectory(at: home)
 
         } catch is InvalidHostKey {
-            try? await openedClient?.close()
+            await openedRoute?.close()
             guard generation == gen else { return }
             trace.error("failed: host key mismatch (see the presented and trusted fingerprints above)")
-            connectionState = .failed("Host key mismatch")
-            errorMessage = "Host key mismatch — remove the entry from Preferences → Known Hosts and reconnect."
-            isLoading = false
+            fail("Host key mismatch", "Host key mismatch — remove the entry from Preferences → Known Hosts and reconnect.")
         } catch {
-            try? await openedClient?.close()
+            await openedRoute?.close()
             guard generation == gen else {
                 trace.info("ended by a disconnect (\(LoginTrace.describe(error)))")
                 return
             }
             trace.error("failed: \(LoginTrace.describe(error))")
             let message = (error as? SSHAgentClientError)?.localizedDescription ?? error.localizedDescription
-            connectionState = .failed(message)
-            errorMessage = message
-            isLoading = false
+            fail(message, message)
         }
+    }
+
+    private func connectionLost(generation gen: Int) {
+        guard generation == gen else { return }
+        connectionState = .failed("Connection lost")
+        errorMessage = "The server stopped answering keep-alives; the connection was closed."
+    }
+
+    /// Connects again with the passphrase the user gave for the challenge's key.
+    public func connect(answering challenge: SSHPassphraseChallenge, passphrase: String) async {
+        let (target, jumps) = challenge.answered(with: passphrase)
+        await connect(target, via: jumps, options: challenge.options)
+    }
+
+    public func connect(host: String, port: Int, username: String, password: String) async {
+        await connect(SSHLogin(host: host, port: port, username: username, auth: .password(password)))
+    }
+
+    public func connect(host: String, port: Int, username: String, pemKey: String, passphrase: String? = nil) async {
+        await connect(SSHLogin(host: host, port: port, username: username,
+                               auth: .privateKey(pem: pemKey, passphrase: passphrase)))
+    }
+
+    /// Logs in with a key held by an external agent, which may ask the user to approve it.
+    public func connect(host: String, port: Int, username: String, agentKey: SSHAgentKeyReference) async {
+        await connect(SSHLogin(host: host, port: port, username: username, auth: .agentKey(agentKey)))
     }
 
     // MARK: - Navigation
@@ -415,11 +322,12 @@ public class SFTPSessionManager: ObservableObject {
 
     public func disconnect() {
         let sftp = sftpClient
-        let ssh  = sshClient
-        let group = ownedGroup
+        let route = self.route
         sftpClient = nil
-        sshClient  = nil
-        ownedGroup = nil
+        self.route = nil
+        keepAliveTask?.cancel()
+        keepAliveTask = nil
+        passphraseChallenge = nil
         generation += 1
         connectionState = .disconnected
         isLoading  = false
@@ -427,20 +335,9 @@ public class SFTPSessionManager: ObservableObject {
         currentPath = "/"
         Task {
             try? await sftp?.close()
-            try? await ssh?.close()
-            try? await group?.shutdownGracefully()
+            await route?.close()
         }
     }
-}
-
-// MARK: - Passphrase Challenge
-
-public struct SFTPPassphraseChallenge: Identifiable {
-    public let id = UUID()
-    public let pemKey: String
-    public let host: String
-    public let port: Int
-    public let username: String
 }
 
 // MARK: - Errors

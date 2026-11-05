@@ -257,7 +257,7 @@ struct SFTPBrowserView: View {
 
     // MARK: - Sheets
 
-    private func sftpPassphraseSheet(challenge: SFTPPassphraseChallenge) -> some View {
+    private func sftpPassphraseSheet(challenge: SSHPassphraseChallenge) -> some View {
         VStack(spacing: DesignSystem.Spacing.large) {
             Image(systemName: "lock.fill")
                 .font(.system(size: 32))
@@ -266,7 +266,7 @@ struct SFTPBrowserView: View {
             Text("Key Passphrase Required")
                 .font(DesignSystem.Typography.heading())
 
-            Text("This private key is encrypted.\nEnter the passphrase to connect.")
+            Text("The private key for \(challenge.keyOwner.endpoint) is encrypted.\nEnter the passphrase to connect.")
                 .font(DesignSystem.Typography.label())
                 .foregroundStyle(DesignSystem.Colors.textSecondary)
                 .multilineTextAlignment(.center)
@@ -293,15 +293,13 @@ struct SFTPBrowserView: View {
         .frame(width: 340)
     }
 
-    private func submitSFTPPassphrase(challenge: SFTPPassphraseChallenge) {
+    private func submitSFTPPassphrase(challenge: SSHPassphraseChallenge) {
         guard !passphraseInput.isEmpty else { return }
         let p = passphraseInput
         passphraseInput = ""
         sftp.passphraseChallenge = nil
         Task {
-            await sftp.connect(host: challenge.host, port: challenge.port,
-                               username: challenge.username, pemKey: challenge.pemKey,
-                               passphrase: p)
+            await sftp.connect(answering: challenge, passphrase: p)
         }
     }
 

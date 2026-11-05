@@ -464,3 +464,75 @@ extension OpenSSH.KeyType {
         self = keyType
     }
 }
+
+// MARK: - SSHoebox patch: key types Citadel doesn't model
+
+/// The decrypted private half of an `openssh-key-v1` key, for key types Citadel has no
+/// `OpenSSHPrivateKey` conformance for (ECDSA). SSHoebox patch.
+public struct OpenSSHPrivateKeyFields {
+    /// The key type, e.g. `ecdsa-sha2-nistp256`.
+    public let keyType: String
+    /// The key's private fields as stored after the key type (for ECDSA: curve name, public
+    /// point Q, private scalar d), followed by the comment and padding.
+    public let fields: ByteBuffer
+
+    public enum Error: Swift.Error {
+        /// The key is encrypted and no passphrase was given.
+        case passphraseRequired
+        /// The passphrase is wrong (the check integers don't match).
+        case wrongPassphrase
+    }
+
+    /// Reads and, if needed, decrypts an `-----BEGIN OPENSSH PRIVATE KEY-----` block.
+    public init(openSSHKey key: String, decryptionKey: Data?) throws {
+        var key = key.replacingOccurrences(of: "\r", with: "").replacingOccurrences(of: "\n", with: "")
+        guard
+            key.hasPrefix("-----BEGIN OPENSSH PRIVATE KEY-----"),
+            key.hasSuffix("-----END OPENSSH PRIVATE KEY-----")
+        else {
+            throw InvalidOpenSSHKey.invalidOpenSSHBoundary
+        }
+        key.removeLast("-----END OPENSSH PRIVATE KEY-----".utf8.count)
+        key.removeFirst("-----BEGIN OPENSSH PRIVATE KEY-----".utf8.count)
+        guard let data = Data(base64Encoded: key) else {
+            throw InvalidOpenSSHKey.invalidBase64Payload
+        }
+
+        var buffer = ByteBuffer(data: data)
+        guard
+            buffer.readString(length: "openssh-key-v1".utf8.count) == "openssh-key-v1",
+            buffer.readInteger(as: UInt8.self) == 0x00
+        else {
+            throw InvalidOpenSSHKey.invalidOpenSSHPrefix
+        }
+        let cipher = try OpenSSH.Cipher(consuming: &buffer)
+        let kdf = try OpenSSH.KDF(consuming: &buffer)
+        guard buffer.readInteger(as: UInt32.self) == 1 else {
+            throw InvalidOpenSSHKey.unsupportedFeature(.multipleKeys)
+        }
+        guard var publicKeyBuffer = buffer.readSSHBuffer(), let publicKeyType = publicKeyBuffer.readSSHString() else {
+            throw InvalidOpenSSHKey.missingPublicKeyBuffer
+        }
+        guard var privateKeyBuffer = buffer.readSSHBuffer() else {
+            throw InvalidOpenSSHKey.missingPrivateKeyBuffer
+        }
+        if case .bcrypt = kdf, decryptionKey == nil {
+            throw Error.passphraseRequired
+        }
+        try kdf.withKeyAndIV(cipher: cipher, basedOnDecryptionKey: decryptionKey) { key, iv -> Void in
+            try cipher.decryptBuffer(&privateKeyBuffer, key: key, iv: iv)
+        }
+        guard
+            let check0 = privateKeyBuffer.readInteger(as: UInt32.self),
+            let check1 = privateKeyBuffer.readInteger(as: UInt32.self),
+            check0 == check1
+        else {
+            throw Error.wrongPassphrase
+        }
+        guard let privateKeyType = privateKeyBuffer.readSSHString(), privateKeyType == publicKeyType else {
+            throw InvalidOpenSSHKey.invalidPublicKeyInPrivateKey
+        }
+        self.keyType = privateKeyType
+        self.fields = privateKeyBuffer
+    }
+}

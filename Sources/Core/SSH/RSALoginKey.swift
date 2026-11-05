@@ -40,7 +40,7 @@ public struct RSALoginKey: @unchecked Sendable {
                 return "This key is an encrypted PKCS#8 key, which SSHoebox can't read. "
                     + "Convert it to the OpenSSH format with “ssh-keygen -p -f <key file>”, then paste it again."
             case .malformed(let detail):
-                return "This RSA key couldn't be read (\(detail))."
+                return "This key couldn't be read (\(detail))."
             }
         }
     }
@@ -171,7 +171,8 @@ public struct RSALoginKey: @unchecked Sendable {
 }
 
 /// Just enough DER to read PKCS#1 and PKCS#8 RSA private keys.
-private struct DERReader {
+/// A minimal DER reader for private key structures (PKCS#1, PKCS#8, SEC1).
+struct DERReader {
     static let integer: UInt8 = 0x02
     static let octetString: UInt8 = 0x04
     static let objectIdentifier: UInt8 = 0x06
@@ -186,6 +187,19 @@ private struct DERReader {
     mutating func read(_ tag: UInt8) throws -> [UInt8] {
         Array(try readSlice(tag))
     }
+
+    var isAtEnd: Bool { bytes.isEmpty }
+
+    /// The tag of the next element, without reading it.
+    var nextTag: UInt8? { bytes.first }
+
+    /// The next element, whatever its tag, as a reader over its contents.
+    mutating func readElement() throws -> (tag: UInt8, contents: DERReader) {
+        guard let tag = bytes.first else { throw RSALoginKey.ParseError.malformed("truncated DER") }
+        return (tag, DERReader(slice: try readSlice(tag)))
+    }
+
+    var remainingBytes: [UInt8] { Array(bytes) }
 
     /// The next element, which must be a SEQUENCE, as a reader over its contents.
     mutating func readSequence() throws -> DERReader {

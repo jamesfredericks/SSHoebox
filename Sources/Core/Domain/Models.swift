@@ -40,6 +40,9 @@ public struct SavedHost: Codable, Equatable, FetchableRecord, PersistableRecord,
     public var createdAt: Date
     public var updatedAt: Date
     public var lastConnectedAt: Date?
+    /// `HostOptions` as JSON, encrypted for this row (see `decryptedOptions(using:)`). Nil
+    /// until the host's connection options are first edited. Schema v9.
+    public var encryptedOptions: Data?
 
     public init(id: String = UUID().uuidString,
                 name: String,
@@ -50,7 +53,8 @@ public struct SavedHost: Codable, Equatable, FetchableRecord, PersistableRecord,
                 groupId: String? = nil,
                 createdAt: Date = Date(),
                 updatedAt: Date = Date(),
-                lastConnectedAt: Date? = nil) {
+                lastConnectedAt: Date? = nil,
+                encryptedOptions: Data? = nil) {
         self.id = id
         self.name = name
         self.hostname = hostname
@@ -61,6 +65,7 @@ public struct SavedHost: Codable, Equatable, FetchableRecord, PersistableRecord,
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.lastConnectedAt = lastConnectedAt
+        self.encryptedOptions = encryptedOptions
     }
 }
 
