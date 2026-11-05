@@ -200,6 +200,19 @@ final class LiveSSHDTests: XCTestCase {
         }.value
     }
 
+    func testOneShotCommandThroughAJumpHost() async throws {
+        let repository = KnownHostRepository(dbManager: try DatabaseManager(inMemory: true))
+        let output = try await SSHCommandRunner.run("echo one-shot-$((2*21))", target: try keyLogin("ecdsa_pkcs8"),
+                                                    via: [try keyLogin("rsa_pkcs1")], repository: repository,
+                                                    purpose: "test")
+        XCTAssertEqual(output.trimmingCharacters(in: .whitespacesAndNewlines), "one-shot-42")
+        do {
+            _ = try await SSHCommandRunner.run("true", target: try keyLogin("rsa_openssh_enc"), repository: repository,
+                                               purpose: "test")
+            XCTFail("an encrypted key without its passphrase can't log in here")
+        } catch SSHCommandRunner.RunError.needsPassphrase {}
+    }
+
     func testUnauthorizedRSAKeyIsRejectedClearly() async throws {
         let text = try await login(key: "rsa_unauthorized")
         XCTAssertTrue(text.contains("rejected the key as rsa-sha2-512 and rsa-sha2-256"), text)

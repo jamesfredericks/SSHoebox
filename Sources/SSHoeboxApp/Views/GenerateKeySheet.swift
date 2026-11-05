@@ -79,7 +79,7 @@ struct GenerateKeySheet: View {
                     .background(DesignSystem.Colors.surface)
                     .cornerRadius(8)
 
-                    Text("Add the public key to your server's ~/.ssh/authorized_keys. The private key will be saved to this host's credentials.")
+                    Text("Add the public key to your server's ~/.ssh/authorized_keys: after saving, right-click the key in Credentials and choose Install Public Key on Server. The private key will be saved to this host's credentials.")
                         .font(.caption)
                         .foregroundStyle(DesignSystem.Colors.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)

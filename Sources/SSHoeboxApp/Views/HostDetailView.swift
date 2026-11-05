@@ -19,11 +19,19 @@ struct HostDetailView: View {
     @State private var credentialToEdit: Credential? = nil
     @State private var copiedId: String? = nil
     @State private var credentialForHistory: Credential? = nil
+    @State private var keyToInstall: KeyToInstall? = nil
+    @State private var publicKeyError: String? = nil
     @State private var selectedTab: HostTab = .credentials
     @StateObject private var sftpManager = SFTPSessionManager()
 
     enum HostTab {
         case credentials, terminal, files
+    }
+
+    struct KeyToInstall: Identifiable {
+        let id = UUID()
+        let line: String
+        let name: String
     }
     
     init(host: SavedHost, dbManager: DatabaseManager, vaultKey: SymmetricKey, hostsViewModel: HostsViewModel) {
@@ -96,6 +104,16 @@ struct HostDetailView: View {
         }
         .sheet(item: $credentialForHistory) { credential in
             PasswordHistorySheet(credential: credential, dbManager: dbManager, vaultKey: vaultKey)
+        }
+        .sheet(item: $keyToInstall) { key in
+            InstallKeySheet(publicKeyLine: key.line, keyName: key.name, initialHostId: host.id,
+                            dbManager: dbManager, vaultKey: vaultKey)
+        }
+        .alert("Public Key Unavailable", isPresented: Binding(get: { publicKeyError != nil },
+                                                             set: { if !$0 { publicKeyError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(publicKeyError ?? "")
         }
         .alert("Delete Host", isPresented: $showingDeleteAlert) {
             Button("Cancel", role: .cancel) { }
@@ -249,6 +267,22 @@ struct HostDetailView: View {
                             Label("View History", systemImage: "clock.arrow.circlepath")
                         }
 
+                        if credential.type == "key" || credential.type == SSHAgentKeyReference.credentialType {
+                            Divider()
+                            Button {
+                                showInstallKey(for: credential)
+                            } label: {
+                                Label("Install Public Key on Server…", systemImage: "key.horizontal")
+                            }
+                            Button {
+                                if let line = publicKeyLine(for: credential) {
+                                    ClipboardManager.shared.copy(line)
+                                }
+                            } label: {
+                                Label("Copy Public Key", systemImage: "doc.on.doc")
+                            }
+                        }
+
                         Divider()
 
                         Button(role: .destructive) {
@@ -307,6 +341,30 @@ struct HostDetailView: View {
         } catch {
             sftpManager.errorMessage = error.localizedDescription
         }
+    }
+
+    /// The credential's OpenSSH public key line, or nil (with the reason shown) if it can't be read.
+    private func publicKeyLine(for credential: Credential) -> String? {
+        let comment = credential.decryptedUsername(using: vaultKey) + "@" + host.decryptedName(using: vaultKey)
+        if let agentKey = viewModel.agentKey(for: credential) {
+            return agentKey.publicKey
+        }
+        guard let pem = viewModel.decrypt(credential: credential) else {
+            publicKeyError = "The stored key couldn't be decrypted."
+            return nil
+        }
+        do {
+            return try AuthorizedKeys.publicKeyLine(fromPEM: pem, comment: "sshoebox " + comment)
+        } catch {
+            publicKeyError = error.localizedDescription
+            return nil
+        }
+    }
+
+    private func showInstallKey(for credential: Credential) {
+        guard let line = publicKeyLine(for: credential) else { return }
+        let name = credential.type == SSHAgentKeyReference.credentialType ? "the agent key" : "this key"
+        keyToInstall = KeyToInstall(line: line, name: name)
     }
 
     /// Copies the secret, or for an agent credential its public key (handy for authorized_keys).
