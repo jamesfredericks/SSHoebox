@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 import Combine
 import SwiftTerm
+import CryptoKit
 import SSHoeboxCore
 
 /// One terminal tab: an SSH session and the terminal view showing it. The session owns its
@@ -21,8 +22,13 @@ final class TerminalSession: ObservableObject, Identifiable {
 
     @Published private(set) var recorder: SessionRecorder?
     @Published private(set) var recordingError: String?
+    /// Recordings are sealed with a key derived from this; dropped with the session on lock.
+    private let vaultKey: SymmetricKey
+    /// Seals buffered output every couple of seconds, so little is lost if the app quits.
+    private var flushTimer: Timer?
 
-    init(hostId: String, hostName: String, title: String, manager: SSHSessionManager) {
+    init(hostId: String, hostName: String, title: String, manager: SSHSessionManager, vaultKey: SymmetricKey) {
+        self.vaultKey = vaultKey
         self.hostId = hostId
         self.hostName = hostName
         self.title = title
@@ -63,9 +69,14 @@ final class TerminalSession: ObservableObject, Identifiable {
     func startRecording() {
         guard recorder == nil else { return }
         do {
-            recorder = try SessionRecorder(hostName: hostName, endpoint: manager.endpoint ?? hostName)
+            let recorder = try SessionRecorder(hostName: hostName, endpoint: manager.endpoint ?? hostName,
+                                               vaultKey: vaultKey)
+            self.recorder = recorder
             recordingError = nil
-            LoginTrace.event("recording: \(hostName) \(title) to \(recorder!.fileURL.path)")
+            flushTimer = Timer.scheduledTimer(withTimeInterval: SessionRecorder.flushInterval, repeats: true) { [weak recorder] _ in
+                recorder?.flush()
+            }
+            LoginTrace.event("recording: \(hostName) \(title) to \(recorder.fileURL.path) (encrypted)")
         } catch {
             recordingError = error.localizedDescription
             LoginTrace.event("recording: could not start for \(hostName): \(error.localizedDescription)", level: .error)
@@ -73,6 +84,8 @@ final class TerminalSession: ObservableObject, Identifiable {
     }
 
     func stopRecording() {
+        flushTimer?.invalidate()
+        flushTimer = nil
         recorder?.finish()
         recorder = nil
     }

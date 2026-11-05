@@ -39,7 +39,7 @@ SSHoebox is a secure, native macOS application for managing SSH and SFTP connect
 - **Broadcast input**: sessions in the broadcast group all receive what you type (per session, per host, or all), with clear orange markings; the workspace can also send one line to the group
 - **Snippets**: saved commands per host or for all hosts, run from the tab bar (⌥-click types without running)
 - **Find** in the terminal (⌘F, ⌘G, ⇧⌘G)
-- **Session recording**: a plain-text transcript of what the session showed, per session or for all sessions (Preferences)
+- **Session recording**: a transcript of what the session showed, per session or for all sessions (Preferences), **encrypted at rest** (AES-256-GCM, key derived from the vault key; not even the host name is visible in the files) and read in Settings → Recordings
 - Reconnect overlay with the failure reason, adjustable font size (⌘+/⌘−), themes
 - OSC 52 clipboard writes only when allowed in Preferences; terminal links open only http(s) URLs
 
@@ -122,7 +122,7 @@ The codebase is split into two Swift package targets:
 
 **Key security properties:**
 - Master password is never stored — only the derived vault key (in memory) and a biometric-gated keychain item
-- All credential decryption is on-demand; secrets are never written to disk in plaintext (session recordings, which are off unless you turn them on, are plain-text transcripts of terminal output and are written readable only by your account)
+- All credential decryption is on-demand; secrets are never written to disk in plaintext. Session recordings are encrypted as they're written and only decrypted in memory to view them (exporting one as text is an explicit, warned action)
 - Field-level AES-256-GCM encryption is applied on top of SQLCipher full-file encryption (defense in depth)
 - The SSH agent only serves keys while the vault is unlocked
 

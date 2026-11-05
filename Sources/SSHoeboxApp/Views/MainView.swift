@@ -14,6 +14,7 @@ struct MainView: View {
         case backups
         case preferences
         case logs
+        case recordings
     }
 
     var body: some View {
@@ -53,6 +54,11 @@ struct MainView: View {
                         Label("Logs", systemImage: "text.magnifyingglass")
                             .foregroundColor(DesignSystem.Colors.textPrimary)
                     }
+
+                    NavigationLink(value: SidebarItem.recordings) {
+                        Label("Recordings", systemImage: "record.circle")
+                            .foregroundColor(DesignSystem.Colors.textPrimary)
+                    }
                 }
             }
             .listStyle(.sidebar)
@@ -79,6 +85,10 @@ struct MainView: View {
                     PreferencesView(viewModel: viewModel)
                 case .logs:
                     LoginLogView(viewModel: viewModel)
+                case .recordings:
+                    if let key = viewModel.vaultKey {
+                        RecordingsView(vaultKey: key)
+                    }
                 case .none:
                     Text("Select an item")
                         .foregroundStyle(DesignSystem.Colors.textSecondary)

@@ -26,7 +26,7 @@ enum SyncedSettings {
         "terminalAllowOSC52": .bool,
         "isAgentEnabled": .bool,
         SSHSessionOptions.keepAliveDefaultsKey: .int,
-        SessionRecorder.autoRecordDefaultsKey: .bool,
+        SessionRecording.autoRecordDefaultsKey: .bool,
     ]
 
     /// This Mac's values. Settings it has never stored are left out.

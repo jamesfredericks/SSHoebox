@@ -8,8 +8,8 @@ struct PreferencesView: View {
     @AppStorage(VaultViewModel.deferAutoLockForSessionsKey) private var deferAutoLockForSessions = false
     @AppStorage("terminalAllowOSC52") private var allowOSC52 = false
     @AppStorage(SSHSessionOptions.keepAliveDefaultsKey) private var keepAliveInterval = SSHSessionOptions.defaultKeepAliveInterval
-    @AppStorage(SessionRecorder.autoRecordDefaultsKey) private var recordAllSessions = false
-    @AppStorage(SessionRecorder.directoryDefaultsKey) private var recordingsDirectory = ""
+    @AppStorage(SessionRecording.autoRecordDefaultsKey) private var recordAllSessions = false
+    @AppStorage(SessionRecording.directoryDefaultsKey) private var recordingsDirectory = ""
     @State private var clipboardClearTimeout: Int = 30
     @State private var isBiometricEnabled: Bool = false
     @State private var showBiometricVaultLockedAlert: Bool = false
@@ -209,13 +209,13 @@ struct PreferencesView: View {
                     Text("Recordings folder")
                         .foregroundStyle(DesignSystem.Colors.textPrimary)
                     Spacer()
-                    Text(SessionRecorder.directory.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
+                    Text(SessionRecording.directory.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
                         .foregroundStyle(DesignSystem.Colors.textSecondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Button("Choose…") { chooseRecordingsFolder() }
                     Button("Show") {
-                        let folder = SessionRecorder.directory
+                        let folder = SessionRecording.directory
                         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
                         NSWorkspace.shared.open(folder)
                     }
@@ -224,7 +224,7 @@ struct PreferencesView: View {
                 Text("Session Recording")
                     .foregroundStyle(DesignSystem.Colors.textSecondary)
             } footer: {
-                Text("Recordings are plain-text transcripts of what the terminal showed, readable only by your Mac account. They're not encrypted and stay outside the vault, so anything a server printed (including secrets it displayed) is in them. Input the server doesn't echo, such as passwords, isn't recorded. Any session can also be recorded from its record button.")
+                Text("Recordings are transcripts of what the terminal showed, encrypted with a key derived from your vault key (AES-256-GCM): they can only be read in SSHoebox with this vault unlocked, and not even the host name shows in the files. Open them under Settings → Recordings. Input the server doesn't echo, such as passwords, isn't recorded. Any session can also be recorded from its record button.")
                     .foregroundStyle(DesignSystem.Colors.textSecondary)
             }
 
@@ -473,7 +473,7 @@ extension PreferencesView {
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
         panel.prompt = "Choose"
-        panel.directoryURL = SessionRecorder.directory
+        panel.directoryURL = SessionRecording.directory
         if panel.runModal() == .OK, let url = panel.url {
             recordingsDirectory = url.path
         }

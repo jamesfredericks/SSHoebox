@@ -119,10 +119,19 @@ final class UISmokeTests: XCTestCase {
         await pump(1.0)
         snapshot("5-files")
 
-        for item in [MainView.SidebarItem.preferences, .logs, .generator, .hosts] {
+        UserDefaults.standard.set(vaultDir.appendingPathComponent("recordings").path,
+                                  forKey: SessionRecording.directoryDefaultsKey)
+        defer { UserDefaults.standard.removeObject(forKey: SessionRecording.directoryDefaultsKey) }
+        let recorder = try SessionRecorder(hostName: "app", endpoint: "me@127.0.0.1:1", vaultKey: key)
+        recorder.record(Data("uptime\r\n 12:00 up 3 days\r\n".utf8))
+        recorder.finish()
+        for item in [MainView.SidebarItem.preferences, .logs, .generator, .recordings, .hosts] {
             navigator.sidebar = item
             await pump()
         }
+
+        await render(RecordingsView(vaultKey: key))
+        snapshot("10-recordings")
 
         // Sheets and palettes on their own.
         await render(QuickConnectView(dbManager: db, vaultKey: key).environmentObject(navigator))

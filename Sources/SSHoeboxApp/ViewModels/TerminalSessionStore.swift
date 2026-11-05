@@ -145,10 +145,11 @@ class TerminalSessionStore: ObservableObject {
             hostId: host.id,
             hostName: host.decryptedName(using: vaultKey),
             title: "Terminal \(nextSessionNumber)",
-            manager: manager
+            manager: manager,
+            vaultKey: vaultKey
         )
         session.registry = registry
-        if SessionRecorder.recordsAutomatically { session.startRecording() }
+        if SessionRecording.recordsAutomatically { session.startRecording() }
         sessions.append(session)
         selectedSessionId = session.id
 

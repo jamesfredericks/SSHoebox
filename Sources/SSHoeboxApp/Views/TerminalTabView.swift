@@ -244,7 +244,7 @@ private struct SessionTabButton: View {
                 Image(systemName: "record.circle")
                     .font(.system(size: 9))
                     .foregroundStyle(.red)
-                    .help("Recording to \(session.recorder?.fileURL.lastPathComponent ?? "a file")")
+                    .help("Recording (encrypted)")
             }
             if isBroadcasting {
                 Image(systemName: "dot.radiowaves.left.and.right")
@@ -319,27 +319,23 @@ struct TunnelsMenu: View {
     }
 }
 
-/// Starts or stops recording the session's output to a text file.
+/// Starts or stops recording the session's output (encrypted, see `SessionRecorder`).
 struct RecordButton: View {
     @ObservedObject var session: TerminalSession
+    @EnvironmentObject private var navigator: AppNavigator
 
     var body: some View {
         Menu {
-            if let recorder = session.recorder {
-                Text("Recording to \(recorder.fileURL.lastPathComponent)")
+            if session.isRecording {
+                Text("Recording (encrypted)")
                 Button("Stop Recording") { session.stopRecording() }
-                Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([recorder.fileURL]) }
             } else {
                 Button("Start Recording") { session.startRecording() }
-                Button("Open Recordings Folder") {
-                    let folder = SessionRecorder.directory
-                    try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-                    NSWorkspace.shared.open(folder)
-                }
                 if let error = session.recordingError {
                     Text("Couldn't record: \(error)")
                 }
             }
+            Button("Show Recordings") { navigator.sidebar = .recordings }
         } label: {
             Image(systemName: session.isRecording ? "record.circle.fill" : "record.circle")
         }
@@ -347,7 +343,7 @@ struct RecordButton: View {
         .menuIndicator(.hidden)
         .frame(width: 28, height: 28)
         .foregroundStyle(session.isRecording ? Color.red : DesignSystem.Colors.textSecondary)
-        .help(session.isRecording ? "Recording this session's output" : "Record this session's output to a text file")
+        .help(session.isRecording ? "Recording this session's output (encrypted)" : "Record this session's output, encrypted")
     }
 }
 
