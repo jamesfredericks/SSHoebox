@@ -45,7 +45,7 @@ internal struct UserAuthSignablePayload {
         newBuffer.writeSSHString(serviceName.utf8)
         newBuffer.writeSSHString("publickey".utf8)
         newBuffer.writeSSHBoolean(true)
-        newBuffer.writeSSHString(publicKey.keyPrefix)
+        newBuffer.writeSSHString(publicKey.userAuthAlgorithmName)  // SSHoebox patch: was publicKey.keyPrefix
         newBuffer.writeCompositeSSHString { buffer in
             buffer.writeSSHHostKey(publicKey)
         }

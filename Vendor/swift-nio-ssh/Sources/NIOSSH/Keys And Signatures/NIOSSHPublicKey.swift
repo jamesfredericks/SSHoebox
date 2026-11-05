@@ -199,6 +199,15 @@ extension NIOSSHPublicKey {
         }
     }
 
+    /// SSHoebox patch: the algorithm name a publickey login request gives for this key. The
+    /// key type, except for custom keys that adopt `NIOSSHUserAuthAlgorithmNaming`.
+    var userAuthAlgorithmName: String.UTF8View {
+        if case .custom(let publicKey) = self.backingKey, let named = publicKey as? NIOSSHUserAuthAlgorithmNaming {
+            return named.userAuthAlgorithmName.utf8
+        }
+        return self.keyPrefix
+    }
+
     private static let bundledAlgorithms: [String.UTF8View] = [
         Self.ed25519PublicKeyPrefix, Self.ecdsaP384PublicKeyPrefix, Self.ecdsaP256PublicKeyPrefix, Self.ecdsaP521PublicKeyPrefix,
     ]

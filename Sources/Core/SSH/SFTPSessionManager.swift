@@ -104,7 +104,7 @@ public class SFTPSessionManager: ObservableObject {
         }
     }
 
-    // MARK: - Connect (PEM key — Ed25519 only for SFTP)
+    // MARK: - Connect (PEM key — Ed25519 or RSA)
 
     public func connect(host: String, port: Int, username: String, pemKey: String, passphrase: String? = nil) async {
         let pemKey = SSHKeyParser.normalizedPEM(pemKey)
@@ -127,6 +127,28 @@ public class SFTPSessionManager: ObservableObject {
             return
         }
 
+        do {
+            if let rsaKey = try RSALoginKey.parse(pem: pemKey, decryptionKey: decryptionKey) {
+                passphraseChallenge = nil
+                trace.info("key: ssh-rsa \(rsaKey.bits)-bit \(rsaKey.format.rawValue) key \(sshFingerprint(forBlob: rsaKey.publicKeyBlob)); "
+                           + "logs in as \(RSALoginKey.algorithms.joined(separator: ", then ")) (never SHA-1 ssh-rsa); "
+                           + "the server must list it in authorized_keys")
+                await doConnect(host: host, port: port, trace: trace) { settings in
+                    var s = settings
+                    s.authenticationMethod = {
+                        .custom(PublicKeyAuthenticator(username: username, attempts: rsaKey.loginAttempts, trace: trace))
+                    }
+                    return s
+                }
+                return
+            }
+        } catch {
+            trace.error("key: \(LoginTrace.describe(error))")
+            connectionState = .failed("Unsupported key format")
+            errorMessage = error.localizedDescription
+            return
+        }
+
         // Key is encrypted — request passphrase
         if SSHKeyParser.isEncryptedKey(pemKey) {
             if passphrase == nil {
@@ -135,7 +157,7 @@ public class SFTPSessionManager: ObservableObject {
                     pemKey: pemKey, host: host, port: port, username: username
                 )
             } else {
-                trace.error("key: passphrase is incorrect, or the key isn't an Ed25519 OpenSSH key")
+                trace.error("key: passphrase is incorrect, or the key isn't an Ed25519 or RSA key")
                 connectionState = .failed("Incorrect passphrase")
                 errorMessage = "The passphrase you entered is incorrect."
             }
@@ -143,9 +165,9 @@ public class SFTPSessionManager: ObservableObject {
         }
 
         let fingerprint = (try? SSHKeyParser.publicKeyBlob(fromPEM: pemKey)).map(sshFingerprint(forBlob:))
-        trace.error("key: not an Ed25519 OpenSSH key\(fingerprint.map { " (\($0))" } ?? ""); SFTP only supports Ed25519 keys")
+        trace.error("key: not an Ed25519 or RSA key\(fingerprint.map { " (\($0))" } ?? ""); SFTP only supports those")
         connectionState = .failed("Unsupported key type")
-        errorMessage = "Only Ed25519 keys are currently supported for SFTP direct authentication."
+        errorMessage = "Only Ed25519 and RSA keys are currently supported for SFTP direct authentication."
     }
 
     // MARK: - Connect (external SSH agent)

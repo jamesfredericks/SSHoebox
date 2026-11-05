@@ -69,6 +69,17 @@ internal extension NIOSSHPublicKeyProtocol {
     }
 }
 
+/// SSHoebox patch: a custom public key whose login algorithm name differs from its key type.
+///
+/// A publickey login request names a "public key algorithm" and then sends the key blob,
+/// whose own type string is the key type. For most keys the two are the same, but an RSA key
+/// (blob type `ssh-rsa`) logs in as `rsa-sha2-256` or `rsa-sha2-512` (RFC 8332), with a
+/// signature of that same name. Keys that don't adopt this use `publicKeyPrefix` for both.
+public protocol NIOSSHUserAuthAlgorithmNaming: NIOSSHPublicKeyProtocol {
+    /// The public key algorithm name sent and signed in a publickey login request.
+    var userAuthAlgorithmName: String { get }
+}
+
 public protocol NIOSSHPrivateKeyProtocol {
     /// An identifier that represents the type of private key used in an SSH packet.
     /// This identifier MUST be unique to the private key implementation.

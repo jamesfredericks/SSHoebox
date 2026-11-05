@@ -69,7 +69,10 @@ extension SSHMessage {
             case .password:
                 method = "password (not logged)"
             case .publicKey(.known(let key, let signature)):
-                method = "publickey \(String(key.keyPrefix)) \(signature == nil ? "(query, no signature)" : "with signature")"
+                let algorithm = String(key.userAuthAlgorithmName)
+                let keyType = String(key.keyPrefix)
+                method = "publickey \(algorithm)" + (algorithm == keyType ? "" : " (\(keyType) key)")
+                    + " \(signature == nil ? "(query, no signature)" : "with signature")"
             case .publicKey(.unknown):
                 method = "publickey (unknown key type)"
             case .keyboardInteractive(let submethods):

@@ -182,6 +182,16 @@ extension Insecure.RSA {
             self._publicKey = PublicKey(publicExponent: publicExponent, modulus: modulus)
         }
         
+        /// SSHoebox patch: builds a key from the big-endian bytes of its modulus `n`, public
+        /// exponent `e` and private exponent `d`, as found in a PKCS#1 or PKCS#8 key.
+        public convenience init(modulus: [UInt8], publicExponent: [UInt8], privateExponent: [UInt8]) {
+            self.init(
+                privateExponent: CCryptoBoringSSL_BN_bin2bn(privateExponent, privateExponent.count, nil)!,
+                publicExponent: CCryptoBoringSSL_BN_bin2bn(publicExponent, publicExponent.count, nil)!,
+                modulus: CCryptoBoringSSL_BN_bin2bn(modulus, modulus.count, nil)!
+            )
+        }
+
         deinit {
             CCryptoBoringSSL_BN_free(privateExponent)
         }

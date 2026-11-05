@@ -10,8 +10,9 @@ import NIOSSH
 /// signing call blocks its event loop. Connections using these keys therefore get an event
 /// loop of their own (see `SSHSessionManager.connect(host:port:username:agentKey:terminalSize:)`).
 public enum AgentBackedKey {
-    /// Key types that can be used through an agent. RSA isn't among them: NIOSSH names the
-    /// login algorithm after the key type (`ssh-rsa`, i.e. SHA-1), which servers now refuse.
+    /// Key types that can be used through an agent. RSA isn't among them yet: it would need the
+    /// agent asked for an rsa-sha2-512/256 signature (sign-request flags), as `RSALoginKey`
+    /// does for stored keys, since servers now refuse SHA-1 `ssh-rsa`.
     public static let supportedAlgorithms: Set<String> = [
         AgentEd25519.name, AgentECDSAP256.name, AgentECDSAP384.name, AgentECDSAP521.name,
     ]

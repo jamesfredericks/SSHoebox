@@ -135,7 +135,31 @@ public class SSHSessionManager: ObservableObject {
         await startSession(trace: trace, terminalSize: terminalSize, capturer: capturer) { _ in settings }
     }
 
-    // MARK: - Connect (PEM Key — parses Ed25519, falls back to interactive)
+    private func connectRSA(
+        host: String,
+        port: Int,
+        username: String,
+        rsaKey: RSALoginKey,
+        terminalSize: (cols: Int, rows: Int),
+        trace: LoginTrace
+    ) async {
+        trace.info("key: ssh-rsa \(rsaKey.bits)-bit \(rsaKey.format.rawValue) key \(sshFingerprint(forBlob: rsaKey.publicKeyBlob)); "
+                   + "logs in as \(RSALoginKey.algorithms.joined(separator: ", then ")) (never SHA-1 ssh-rsa); "
+                   + "the server must list it in authorized_keys")
+        guard let (validator, capturer) = buildValidator(for: host, port: port, trace: trace) else { return }
+        var settings = SSHClientSettings(
+            host: host,
+            port: port,
+            authenticationMethod: {
+                .custom(PublicKeyAuthenticator(username: username, attempts: rsaKey.loginAttempts, trace: trace))
+            },
+            hostKeyValidator: validator
+        )
+        settings.algorithms = SSHAlgorithmPolicy.algorithms
+        await startSession(trace: trace, terminalSize: terminalSize, capturer: capturer) { _ in settings }
+    }
+
+    // MARK: - Connect (PEM Key — Ed25519 or RSA, falls back to interactive)
 
     public func connect(
         host: String,
@@ -161,6 +185,20 @@ public class SSHSessionManager: ObservableObject {
             return
         }
 
+        do {
+            if let rsaKey = try RSALoginKey.parse(pem: pemKey, decryptionKey: decryptionKey) {
+                passphraseChallenge = nil
+                await connectRSA(host: host, port: port, username: username, rsaKey: rsaKey,
+                                 terminalSize: terminalSize, trace: trace)
+                return
+            }
+        } catch {
+            trace.error("key: \(LoginTrace.describe(error))")
+            log("⚠  \(error.localizedDescription)", color: "31")
+            connectionState = .failed(error.localizedDescription)
+            return
+        }
+
         // Key is encrypted and no (or wrong) passphrase was provided
         if SSHKeyParser.isEncryptedKey(pemKey) {
             if passphrase == nil {
@@ -170,7 +208,7 @@ public class SSHSessionManager: ObservableObject {
                     username: username, terminalSize: terminalSize
                 )
             } else {
-                trace.error("key: passphrase is incorrect, or the key isn't an Ed25519 OpenSSH key")
+                trace.error("key: passphrase is incorrect, or the key isn't an Ed25519 or RSA key")
                 log("Incorrect passphrase for private key.", color: "31")
                 connectionState = .failed("Incorrect key passphrase — please try again.")
             }
@@ -178,7 +216,7 @@ public class SSHSessionManager: ObservableObject {
         }
 
         let fingerprint = (try? SSHKeyParser.publicKeyBlob(fromPEM: pemKey)).map(sshFingerprint(forBlob:))
-        trace.error("key: not an Ed25519 OpenSSH key\(fingerprint.map { " (\($0))" } ?? ""); only Ed25519 is "
+        trace.error("key: not an Ed25519 or RSA key\(fingerprint.map { " (\($0))" } ?? ""); only those are "
                     + "supported for direct login, so the key is NOT used and keyboard-interactive is tried instead")
         log("Key type not supported for direct auth — using keyboard-interactive.", color: "33")
         await connectInteractive(host: host, port: port, username: username, terminalSize: terminalSize, trace: trace)
@@ -655,6 +693,8 @@ public enum SSHLoginError: Error, CustomStringConvertible {
     case noUsableMethod(String)
     /// The server rejected every attempt.
     case rejected
+    /// The server rejected the stored key.
+    case keyRejected
     /// The user cancelled a login prompt.
     case cancelled
 
@@ -664,6 +704,8 @@ public enum SSHLoginError: Error, CustomStringConvertible {
             return "The server doesn't accept \(methods) login."
         case .rejected:
             return "The server rejected the login (wrong password or code?)."
+        case .keyRejected:
+            return "The server rejected the key. Is its public key in authorized_keys for this user?"
         case .cancelled:
             return "Login cancelled."
         }
