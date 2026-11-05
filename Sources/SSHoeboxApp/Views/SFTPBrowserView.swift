@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 import SSHoeboxCore
 
 // MARK: - SFTPBrowserView
@@ -12,8 +13,10 @@ struct SFTPBrowserView: View {
     @State private var entryToRename: SFTPEntry? = nil
     @State private var renameText = ""
     @State private var statusMessage: String? = nil
-    @State private var showingFilePicker = false
     @State private var passphraseInput = ""
+    @State private var selection = Set<SFTPEntry.ID>()
+    @State private var entriesToDelete: [SFTPEntry] = []
+    @State private var isDropTargeted = false
     @Environment(\.openWindow) private var openWindow
 
     var displayedEntries: [SFTPEntry] {
@@ -37,6 +40,11 @@ struct SFTPBrowserView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
+            if !sftp.transfers.isEmpty {
+                Divider()
+                SFTPTransfersPanel(sftp: sftp)
+            }
+
             if sftp.errorMessage != nil || statusMessage != nil {
                 Divider()
                 bottomStatusBar
@@ -55,13 +63,30 @@ struct SFTPBrowserView: View {
         .sheet(item: $entryToRename) { entry in
             renameSheet(for: entry)
         }
-        .fileImporter(
-            isPresented: $showingFilePicker,
-            allowedContentTypes: [.data],
-            allowsMultipleSelection: false
-        ) { result in
-            handleFilePick(result)
+        .alert("Delete \(entriesToDelete.count == 1 ? "“\(entriesToDelete[0].filename)”" : "\(entriesToDelete.count) items")?",
+               isPresented: Binding(get: { !entriesToDelete.isEmpty }, set: { if !$0 { entriesToDelete = [] } })) {
+            Button("Cancel", role: .cancel) { entriesToDelete = [] }
+            Button("Delete", role: .destructive) {
+                let doomed = entriesToDelete
+                entriesToDelete = []
+                Task { await deleteEntries(doomed) }
+            }
+        } message: {
+            Text(entriesToDelete.contains(where: \.isDirectory)
+                 ? "Folders are deleted with everything in them. This can't be undone."
+                 : "This can't be undone.")
         }
+        .onChange(of: sftp.currentPath) { selection = [] }
+    }
+
+    private var selectedEntries: [SFTPEntry] {
+        displayedEntries.filter { selection.contains($0.id) }
+    }
+
+    /// The entries a context-menu action applies to: the selection if the clicked row is in
+    /// it, otherwise just the clicked row.
+    private func targets(for entry: SFTPEntry) -> [SFTPEntry] {
+        selection.contains(entry.id) ? selectedEntries : [entry]
     }
 
     // MARK: - Control Bar (breadcrumb + action buttons)
@@ -115,11 +140,27 @@ struct SFTPBrowserView: View {
 
                 controlButton(
                     icon: "square.and.arrow.up",
-                    help: "Upload file"
+                    help: "Upload files or folders (or drop them on the list)"
                 ) {
-                    showingFilePicker = true
+                    chooseUploads()
                 }
                 .disabled(sftp.connectionState != .connected)
+
+                controlButton(
+                    icon: "square.and.arrow.down",
+                    help: "Download the selected items"
+                ) {
+                    chooseDownloadFolder(for: selectedEntries)
+                }
+                .disabled(sftp.connectionState != .connected || selection.isEmpty)
+
+                controlButton(
+                    icon: "trash",
+                    help: "Delete the selected items"
+                ) {
+                    entriesToDelete = selectedEntries
+                }
+                .disabled(sftp.connectionState != .connected || selection.isEmpty)
 
                 controlButton(
                     icon: "arrow.clockwise",
@@ -160,43 +201,85 @@ struct SFTPBrowserView: View {
                     systemImage: "folder"
                 )
             } else {
-                List(displayedEntries) { entry in
+                List(displayedEntries, selection: $selection) { entry in
                     SFTPEntryRow(entry: entry)
                         .contentShape(Rectangle())
-                        .onTapGesture(count: 2) {
-                            if entry.isDirectory {
-                                Task { await sftp.navigate(to: entry.path) }
-                            }
-                        }
                         .contextMenu {
-                            if !entry.isDirectory {
+                            let items = targets(for: entry)
+                            if entry.isDirectory && items.count == 1 {
                                 Button {
-                                    downloadEntry(entry)
+                                    Task { await sftp.navigate(to: entry.path) }
                                 } label: {
-                                    Label("Download…", systemImage: "square.and.arrow.down")
+                                    Label("Open", systemImage: "folder")
                                 }
                             }
-
                             Button {
-                                renameText = entry.filename
-                                entryToRename = entry
+                                chooseDownloadFolder(for: items)
                             } label: {
-                                Label("Rename…", systemImage: "pencil")
+                                Label(items.count == 1 ? "Download…" : "Download \(items.count) Items…",
+                                      systemImage: "square.and.arrow.down")
+                            }
+                            Button {
+                                sftp.download(items, to: Self.downloadsFolder)
+                                flash("Downloading to Downloads…")
+                            } label: {
+                                Label("Download to Downloads", systemImage: "arrow.down.circle")
+                            }
+                            Button {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(items.map(\.path).joined(separator: "\n"), forType: .string)
+                            } label: {
+                                Label(items.count == 1 ? "Copy Path" : "Copy Paths", systemImage: "doc.on.doc")
+                            }
+
+                            if items.count == 1 {
+                                Button {
+                                    renameText = entry.filename
+                                    entryToRename = entry
+                                } label: {
+                                    Label("Rename…", systemImage: "pencil")
+                                }
                             }
 
                             Divider()
 
                             Button(role: .destructive) {
-                                Task { await deleteEntry(entry) }
+                                entriesToDelete = items
                             } label: {
-                                Label("Delete", systemImage: "trash")
+                                Label(items.count == 1 ? "Delete…" : "Delete \(items.count) Items…", systemImage: "trash")
                             }
                         }
+                }
+                .contextMenu(forSelectionType: SFTPEntry.ID.self) { _ in
+                    EmptyView()
+                } primaryAction: { ids in
+                    // Double-click or Return: open a folder, download a file.
+                    let chosen = displayedEntries.filter { ids.contains($0.id) }
+                    if chosen.count == 1, let folder = chosen.first, folder.isDirectory {
+                        Task { await sftp.navigate(to: folder.path) }
+                    } else if !chosen.isEmpty {
+                        chooseDownloadFolder(for: chosen)
+                    }
                 }
                 .listStyle(.plain)
             }
         }
         .background(DesignSystem.Colors.background)
+        .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
+            handleDrop(providers)
+        }
+        .overlay {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(DesignSystem.Colors.accent, style: StrokeStyle(lineWidth: 2, dash: [6]))
+                    .background(DesignSystem.Colors.accent.opacity(0.06))
+                    .overlay(Label("Upload to \(sftp.currentPath)", systemImage: "square.and.arrow.up")
+                        .padding(8)
+                        .background(Capsule().fill(DesignSystem.Colors.surface)))
+                    .padding(6)
+                    .allowsHitTesting(false)
+            }
+        }
     }
 
     // MARK: - State Views
@@ -365,7 +448,7 @@ struct SFTPBrowserView: View {
                 try await sftp.createDirectory(named: name)
                 flash("Folder '\(name)' created.")
             } catch {
-                // sftp.errorMessage is set by the manager
+                sftp.errorMessage = "Couldn't create the folder: \(error.localizedDescription)"
             }
         }
     }
@@ -379,52 +462,60 @@ struct SFTPBrowserView: View {
                 try await sftp.rename(entry: entry, to: newName)
                 flash("Renamed to '\(newName)'.")
             } catch {
-                // sftp.errorMessage is set by the manager
+                sftp.errorMessage = "Couldn't rename: \(error.localizedDescription)"
             }
         }
     }
 
-    private func downloadEntry(_ entry: SFTPEntry) {
-        Task {
-            do {
-                let data = try await sftp.downloadData(for: entry)
-                await MainActor.run {
-                    let panel = NSSavePanel()
-                    panel.nameFieldStringValue = entry.filename
-                    if panel.runModal() == .OK, let url = panel.url {
-                        do {
-                            try data.write(to: url)
-                            flash("Downloaded '\(entry.filename)'.")
-                        } catch {
-                            // ignore write error
-                        }
-                    }
-                }
-            } catch {
-                // sftp.errorMessage is set by the manager
-            }
-        }
+    static var downloadsFolder: URL {
+        FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Downloads")
     }
 
-    private func deleteEntry(_ entry: SFTPEntry) async {
+    private func chooseDownloadFolder(for entries: [SFTPEntry]) {
+        guard !entries.isEmpty else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Download Here"
+        panel.message = entries.count == 1 ? "Choose where to save “\(entries[0].filename)”."
+                                           : "Choose where to save \(entries.count) items."
+        panel.directoryURL = Self.downloadsFolder
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+        sftp.download(entries, to: folder)
+    }
+
+    private func chooseUploads() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.prompt = "Upload"
+        panel.message = "Choose files or folders to upload to \(sftp.currentPath)."
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        sftp.upload(panel.urls)
+    }
+
+    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard sftp.connectionState == .connected else { return false }
+        let folder = sftp.currentPath
+        for provider in providers where provider.canLoadObject(ofClass: URL.self) {
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                guard let url, url.isFileURL else { return }
+                Task { @MainActor in sftp.upload([url], to: folder) }
+            }
+        }
+        return true
+    }
+
+    private func deleteEntries(_ entries: [SFTPEntry]) async {
         do {
-            try await sftp.delete(entry: entry)
-            flash("Deleted '\(entry.filename)'.")
+            try await sftp.delete(entries: entries)
+            selection.subtract(entries.map(\.id))
+            flash(entries.count == 1 ? "Deleted '\(entries[0].filename)'." : "Deleted \(entries.count) items.")
         } catch {
-            // sftp.errorMessage is set by the manager
-        }
-    }
-
-    private func handleFilePick(_ result: Result<[URL], Error>) {
-        guard case .success(let urls) = result, let url = urls.first else { return }
-        Task {
-            do {
-                let data = try Data(contentsOf: url)
-                try await sftp.upload(data: data, named: url.lastPathComponent)
-                flash("Uploaded '\(url.lastPathComponent)'.")
-            } catch {
-                // sftp.errorMessage is set by the manager
-            }
+            sftp.errorMessage = "Delete failed: \(error.localizedDescription)"
         }
     }
 
@@ -494,5 +585,95 @@ struct SFTPEntryRow: View {
         if entry.isDirectory { return Color(red: 0.9, green: 0.75, blue: 0.3) }
         if entry.isSymlink   { return DesignSystem.Colors.accent.opacity(0.7) }
         return DesignSystem.Colors.textSecondary
+    }
+}
+
+
+// MARK: - Transfers Panel
+
+/// Uploads and downloads with progress; cancel running ones, clear finished ones.
+struct SFTPTransfersPanel: View {
+    @ObservedObject var sftp: SFTPSessionManager
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("Transfers")
+                    .font(DesignSystem.Typography.label())
+                    .foregroundStyle(DesignSystem.Colors.textSecondary)
+                Spacer()
+                Button("Clear Finished") { sftp.clearFinishedTransfers() }
+                    .buttonStyle(.plain)
+                    .font(DesignSystem.Typography.label())
+                    .foregroundStyle(DesignSystem.Colors.accent)
+                    .disabled(!sftp.transfers.contains { !$0.isActive })
+            }
+            ScrollView {
+                VStack(spacing: 4) {
+                    ForEach(sftp.transfers.reversed()) { transfer in
+                        row(transfer)
+                    }
+                }
+            }
+            .frame(maxHeight: 120)
+        }
+        .padding(.horizontal, DesignSystem.Spacing.medium)
+        .padding(.vertical, 6)
+        .background(DesignSystem.Colors.surface)
+    }
+
+    private func row(_ transfer: SFTPTransfer) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: transfer.direction == .upload ? "arrow.up.circle" : "arrow.down.circle")
+                .foregroundStyle(DesignSystem.Colors.textSecondary)
+            Text(transfer.name)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(width: 160, alignment: .leading)
+            switch transfer.state {
+            case .queued:
+                Text("Waiting…").foregroundStyle(DesignSystem.Colors.textSecondary)
+                Spacer()
+            case .running:
+                if let fraction = transfer.fractionCompleted {
+                    ProgressView(value: fraction)
+                } else {
+                    ProgressView().controlSize(.small)
+                    Spacer()
+                }
+                Text(detail(transfer)).monospacedDigit().foregroundStyle(DesignSystem.Colors.textSecondary)
+            case .finished:
+                Label(detail(transfer), systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                Spacer()
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting([transfer.localURL])
+                } label: { Image(systemName: "magnifyingglass") }
+                    .buttonStyle(.plain)
+                    .help("Show in Finder")
+                    .opacity(transfer.direction == .download ? 1 : 0)
+            case .failed(let reason):
+                Label(reason, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.red).lineLimit(1)
+                Spacer()
+            case .cancelled:
+                Text("Cancelled").foregroundStyle(DesignSystem.Colors.textSecondary)
+                Spacer()
+            }
+            if transfer.isActive {
+                Button {
+                    sftp.cancelTransfer(transfer.id)
+                } label: { Image(systemName: "xmark.circle.fill") }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(DesignSystem.Colors.textSecondary)
+                    .help("Cancel")
+            }
+        }
+        .font(DesignSystem.Typography.label())
+    }
+
+    private func detail(_ transfer: SFTPTransfer) -> String {
+        let done = ByteCountFormatter.string(fromByteCount: Int64(transfer.transferredBytes), countStyle: .file)
+        let files = transfer.fileCount > 1 ? " · \(transfer.filesDone)/\(transfer.fileCount) files" : ""
+        guard let total = transfer.totalBytes else { return done + files }
+        return "\(done) of \(ByteCountFormatter.string(fromByteCount: Int64(total), countStyle: .file))" + files
     }
 }

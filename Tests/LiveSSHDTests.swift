@@ -213,6 +213,59 @@ final class LiveSSHDTests: XCTestCase {
         } catch SSHCommandRunner.RunError.needsPassphrase {}
     }
 
+    /// Uploads a folder into the test folder (on this Mac, through the server), downloads it
+    /// back and compares, then deletes it remotely.
+    func testSFTPFolderRoundTrip() async throws {
+        let fm = FileManager.default
+        let work = folder.appendingPathComponent("sftp-\(UUID().uuidString)")
+        let source = work.appendingPathComponent("source")
+        try fm.createDirectory(at: source.appendingPathComponent("nested/deeper"), withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: work) }
+        let big = Data((0..<(3 * 1024 * 1024 + 17)).map { UInt8(truncatingIfNeeded: $0 &* 31) })
+        try big.write(to: source.appendingPathComponent("big.bin"))
+        try Data("hello".utf8).write(to: source.appendingPathComponent("nested/deeper/small.txt"))
+        try Data().write(to: source.appendingPathComponent("nested/empty"))
+
+        let manager = SFTPSessionManager()
+        manager.knownHostRepository = KnownHostRepository(dbManager: try DatabaseManager(inMemory: true))
+        await manager.connect(try keyLogin("rsa_pkcs1"), options: SSHSessionOptions(keepAliveInterval: 0))
+        XCTAssertEqual(manager.connectionState, .connected, manager.errorMessage ?? "")
+        defer { manager.disconnect() }
+
+        // The server is this Mac: upload into a different folder than the source's.
+        let remoteFolder = work.appendingPathComponent("remote").path
+        try fm.createDirectory(atPath: remoteFolder, withIntermediateDirectories: true)
+        manager.upload([source], to: remoteFolder)
+        try await waitForTransfers(manager)
+        XCTAssertEqual(manager.transfers.last?.state, .finished)
+        XCTAssertEqual(manager.transfers.last?.fileCount, 3)
+        XCTAssertEqual(manager.transfers.last?.transferredBytes, UInt64(big.count + 5))
+
+        let back = work.appendingPathComponent("back")
+        try fm.createDirectory(at: back, withIntermediateDirectories: true)
+        let remoteEntry = SFTPEntry(filename: "source", path: remoteFolder + "/source", isDirectory: true,
+                                    isSymlink: false, size: nil, modifiedDate: nil, permissions: nil)
+        manager.download([remoteEntry], to: back)
+        try await waitForTransfers(manager)
+        XCTAssertEqual(manager.transfers.last?.state, .finished)
+        XCTAssertEqual(try Data(contentsOf: back.appendingPathComponent("source/big.bin")), big)
+        XCTAssertEqual(try String(contentsOf: back.appendingPathComponent("source/nested/deeper/small.txt"), encoding: .utf8), "hello")
+
+        // Downloading again never overwrites: it lands next to the first copy.
+        manager.download([remoteEntry], to: back)
+        try await waitForTransfers(manager)
+        XCTAssertTrue(fm.fileExists(atPath: back.appendingPathComponent("source 2/big.bin").path))
+
+        try await manager.delete(entries: [remoteEntry])
+        XCTAssertFalse(fm.fileExists(atPath: remoteFolder + "/source"), "deleted with its contents")
+    }
+
+    private func waitForTransfers(_ manager: SFTPSessionManager) async throws {
+        for _ in 0..<1500 where manager.transfers.contains(where: \.isActive) {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+    }
+
     func testUnauthorizedRSAKeyIsRejectedClearly() async throws {
         let text = try await login(key: "rsa_unauthorized")
         XCTAssertTrue(text.contains("rejected the key as rsa-sha2-512 and rsa-sha2-256"), text)
