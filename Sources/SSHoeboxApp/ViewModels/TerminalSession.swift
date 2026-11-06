@@ -26,6 +26,7 @@ final class TerminalSession: ObservableObject, Identifiable {
     private let vaultKey: SymmetricKey
     /// Seals buffered output every couple of seconds, so little is lost if the app quits.
     private var flushTimer: Timer?
+    private var quitObserver: NSObjectProtocol?
 
     init(hostId: String, hostName: String, title: String, manager: SSHSessionManager, vaultKey: SymmetricKey) {
         self.vaultKey = vaultKey
@@ -76,6 +77,11 @@ final class TerminalSession: ObservableObject, Identifiable {
             flushTimer = Timer.scheduledTimer(withTimeInterval: SessionRecorder.flushInterval, repeats: true) { [weak recorder] _ in
                 recorder?.flush()
             }
+            // Quitting with ⌘Q doesn't close tabs; close the recording so it isn't left unfinished.
+            quitObserver = NotificationCenter.default.addObserver(
+                forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.stopRecording() }
+            }
             LoginTrace.event("recording: \(hostName) \(title) to \(recorder.fileURL.path) (encrypted)")
         } catch {
             recordingError = error.localizedDescription
@@ -86,6 +92,8 @@ final class TerminalSession: ObservableObject, Identifiable {
     func stopRecording() {
         flushTimer?.invalidate()
         flushTimer = nil
+        if let quitObserver { NotificationCenter.default.removeObserver(quitObserver) }
+        quitObserver = nil
         recorder?.finish()
         recorder = nil
     }

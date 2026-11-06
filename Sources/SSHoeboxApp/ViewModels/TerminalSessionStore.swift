@@ -96,6 +96,12 @@ class TerminalSessionRegistry: ObservableObject {
         objectWillChange.send()
     }
 
+    /// The recorder writing `url`, if a session is recording to it right now.
+    func activeRecorder(for url: URL) -> SessionRecorder? {
+        let wanted = url.resolvingSymlinksInPath()
+        return allSessions.lazy.compactMap(\.recorder).first { $0.fileURL.resolvingSymlinksInPath() == wanted }
+    }
+
     /// The store of an open host, if any.
     func existingStore(for hostId: String) -> TerminalSessionStore? {
         stores[hostId]

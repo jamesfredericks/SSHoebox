@@ -82,6 +82,7 @@ public enum SessionRecording {
         let files = (try? FileManager.default.contentsOfDirectory(
             at: folder, includingPropertiesForKeys: [.fileSizeKey, .creationDateKey])) ?? []
         return files.filter { $0.pathExtension == fileExtension }
+            .map { $0.resolvingSymlinksInPath() }
             .map { url in
                 let values = try? url.resourceValues(forKeys: [.fileSizeKey, .creationDateKey])
                 return Summary(url: url, metadata: try? SessionRecordingReader.metadata(of: url, vaultKey: vaultKey),
@@ -117,6 +118,8 @@ public final class SessionRecorder {
     private var pending = ""
     private var lastFlush = Date()
     private var finished = false
+    /// Whether the text written so far ends a line, so the transcript can end with one.
+    private var endsLine = true
 
     static let flushBytes = 4096
     public static let flushInterval: TimeInterval = 2
@@ -154,15 +157,25 @@ public final class SessionRecorder {
     public func record(_ data: Data) {
         guard !finished else { return }
         pending += stripper.feed(data)
-        if pending.utf8.count >= Self.flushBytes || Date().timeIntervalSince(lastFlush) >= Self.flushInterval {
+        if pending.utf8.count >= Self.flushBytes {
+            flush(includingPartialLine: false)
+        } else if Date().timeIntervalSince(lastFlush) >= Self.flushInterval {
             flush()
         }
     }
 
-    /// Seals buffered text now (also called on a timer by the app while recording).
+    /// Seals buffered text now. The app calls this on a timer while recording, so output
+    /// shows in the viewer within seconds, the prompt line included.
     public func flush() {
-        guard !finished, !pending.isEmpty else { return }
+        flush(includingPartialLine: true)
+    }
+
+    private func flush(includingPartialLine: Bool) {
+        guard !finished else { return }
+        if includingPartialLine { pending += stripper.takePartialLine() }
+        guard !pending.isEmpty else { return }
         try? writeChunk(kind: "T", Data(pending.utf8), isFinal: false)
+        endsLine = pending.hasSuffix("\n")
         pending = ""
         lastFlush = Date()
     }
@@ -170,9 +183,10 @@ public final class SessionRecorder {
     /// Seals what's left and the end marker, and closes the file.
     public func finish(date: Date = Date()) {
         guard !finished else { return }
-        let rest = stripper.flush()
-        if !rest.isEmpty { pending += rest + "\n" }
-        flush()
+        pending += stripper.flush()
+        let wrote = !pending.isEmpty
+        if (wrote && !pending.hasSuffix("\n")) || (!wrote && !endsLine) { pending += "\n" }
+        flush(includingPartialLine: false)
         finished = true
         let end = (try? SessionRecording.encoder.encode(["endedAt": date])) ?? Data("{}".utf8)
         try? writeChunk(kind: "E", end, isFinal: true)
@@ -217,12 +231,23 @@ public enum SessionRecordingReader {
     }
 
     public struct Contents: Equatable {
+        public enum Status: Equatable {
+            /// Ends with its end marker.
+            case complete
+            /// Stops cleanly before an end marker: still being recorded, or SSHoebox quit
+            /// (or the Mac lost power) while recording. Everything saved is there.
+            case unfinished
+            /// Something after the start doesn't decrypt or is cut mid-chunk: the file was
+            /// changed or damaged. The text up to there is kept; nothing after it is trusted.
+            case damaged
+        }
+
         public let metadata: SessionRecording.Metadata
         public let text: String
         public let endedAt: Date?
-        /// False when the file stops before its end marker (the app quit while recording) or a
-        /// chunk after the first fails to decrypt (damage). The text read up to there is kept.
-        public let isComplete: Bool
+        public let status: Status
+
+        public var isComplete: Bool { status == .complete }
     }
 
     public static func metadata(of url: URL, vaultKey: SymmetricKey) throws -> SessionRecording.Metadata {
@@ -243,45 +268,61 @@ public enum SessionRecordingReader {
         }
         let key = SessionRecording.fileKey(vaultKey: vaultKey, salt: header.suffix(SessionRecording.saltLength))
 
-        func nextChunk(_ index: UInt64) throws -> (kind: UInt8, body: Data, isFinal: Bool)? {
-            guard let lengthBytes = try handle.read(upToCount: 4), lengthBytes.count == 4 else { return nil }
+        enum Next {
+            case chunk(kind: UInt8, body: Data, isFinal: Bool)
+            /// The file ends exactly at a chunk boundary.
+            case endOfFile
+            /// Bytes that aren't a whole, authentic chunk at this position.
+            case bad
+        }
+
+        func nextChunk(_ index: UInt64) throws -> Next {
+            guard let lengthBytes = try handle.read(upToCount: 4), !lengthBytes.isEmpty else { return .endOfFile }
+            guard lengthBytes.count == 4 else { return .bad }
             let length = Int(lengthBytes.reduce(UInt32(0)) { $0 << 8 | UInt32($1) })
             guard length >= 29, length <= 16 * 1024 * 1024,
                   let sealed = try handle.read(upToCount: length), sealed.count == length,
-                  let box = try? AES.GCM.SealedBox(combined: sealed) else { return nil }
+                  let box = try? AES.GCM.SealedBox(combined: sealed) else { return .bad }
             for isFinal in [false, true] {
                 let aad = SessionRecording.associatedData(header: header, index: index, isFinal: isFinal)
                 if let plain = try? AES.GCM.open(box, using: key, authenticating: aad), let kind = plain.first {
-                    return (kind, plain.dropFirst(), isFinal)
+                    return .chunk(kind: kind, body: plain.dropFirst(), isFinal: isFinal)
                 }
             }
-            return nil
+            return .bad
         }
 
-        guard let first = try nextChunk(0), first.kind == UInt8(ascii: "M"),
-              let metadata = try? SessionRecording.decoder.decode(SessionRecording.Metadata.self, from: first.body) else {
+        guard case .chunk(let kind, let body, _) = try nextChunk(0), kind == UInt8(ascii: "M"),
+              let metadata = try? SessionRecording.decoder.decode(SessionRecording.Metadata.self, from: body) else {
             throw ReadError.wrongKey
         }
-        if metadataOnly { return Contents(metadata: metadata, text: "", endedAt: nil, isComplete: false) }
+        if metadataOnly { return Contents(metadata: metadata, text: "", endedAt: nil, status: .unfinished) }
 
         var text = ""
         var endedAt: Date?
-        var complete = false
+        var status = Contents.Status.unfinished
         var index: UInt64 = 1
-        while let chunk = try nextChunk(index) {
-            index += 1
-            switch chunk.kind {
-            case UInt8(ascii: "T"):
-                text += String(decoding: chunk.body, as: UTF8.self)
-            case UInt8(ascii: "E"):
-                endedAt = (try? SessionRecording.decoder.decode([String: Date].self, from: chunk.body))?["endedAt"]
-                complete = chunk.isFinal
-            default:
-                break
+        reading: while true {
+            switch try nextChunk(index) {
+            case .endOfFile:
+                break reading
+            case .bad:
+                status = .damaged
+                break reading
+            case .chunk(let kind, let body, let isFinal):
+                index += 1
+                if kind == UInt8(ascii: "T") {
+                    text += String(decoding: body, as: UTF8.self)
+                } else if kind == UInt8(ascii: "E") {
+                    endedAt = (try? SessionRecording.decoder.decode([String: Date].self, from: body))?["endedAt"]
+                }
+                if isFinal {
+                    status = kind == UInt8(ascii: "E") ? .complete : .damaged
+                    break reading
+                }
             }
-            if chunk.isFinal { break }
         }
-        return Contents(metadata: metadata, text: text, endedAt: endedAt, isComplete: complete)
+        return Contents(metadata: metadata, text: text, endedAt: endedAt, status: status)
     }
 }
 
@@ -346,6 +387,22 @@ public struct TerminalTextStripper {
             }
         }
         return String(decoding: out, as: UTF8.self)
+    }
+
+    /// The unfinished last line so far, which is then forgotten: later output continues it
+    /// in the text. Bytes of a UTF-8 character that hasn't fully arrived are kept back.
+    public mutating func takePartialLine() -> String {
+        var cut = line.count
+        // Back up over an incomplete trailing UTF-8 sequence.
+        var lead = cut - 1
+        while lead >= 0, line[lead] & 0xC0 == 0x80, cut - lead < 4 { lead -= 1 }
+        if lead >= 0 {
+            let byte = line[lead]
+            let needed = byte >= 0xF0 ? 4 : byte >= 0xE0 ? 3 : byte >= 0xC0 ? 2 : 1
+            if cut - lead < needed { cut = lead }
+        }
+        defer { line.removeFirst(cut) }
+        return String(decoding: line[..<cut], as: UTF8.self)
     }
 
     /// The unfinished last line, if any.

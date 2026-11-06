@@ -18,6 +18,18 @@ final class SessionRecorderTests: XCTestCase {
         XCTAssertEqual(strip(["\u{1B}(Bplain\n"]), "plain\n")
     }
 
+    func testPartialLinesAreTakenWithoutSplittingCharacters() {
+        var stripper = TerminalTextStripper()
+        _ = stripper.feed(Data("$ caf".utf8) + Data([0xC3]))  // "é" cut in half
+        XCTAssertEqual(stripper.takePartialLine(), "$ caf")
+        _ = stripper.feed(Data([0xA9]) + Data("\r\n".utf8))
+        XCTAssertEqual(stripper.takePartialLine(), "")
+        var again = TerminalTextStripper()
+        XCTAssertEqual(again.feed(Data("ab".utf8)), "")
+        XCTAssertEqual(again.takePartialLine(), "ab")
+        XCTAssertEqual(again.feed(Data("c\n".utf8)), "c\n")
+    }
+
     func testCarriageReturnOverwritesAndBackspaceDeletes() {
         XCTAssertEqual(strip(["10%\r50%\r100%\n"]), "100%\n")
         XCTAssertEqual(strip(["abc\u{08}\u{08}d\n"]), "ad\n")
@@ -101,14 +113,18 @@ final class SessionRecorderTests: XCTestCase {
         tampered[chunks[3].upperBound - 5] ^= 0x01
         try tampered.write(to: url)
         let afterTamper = try SessionRecordingReader.read(url, vaultKey: vaultKey)
-        XCTAssertFalse(afterTamper.isComplete)
+        XCTAssertEqual(afterTamper.status, .damaged)
         XCTAssertFalse(afterTamper.text.contains("third"))
 
         // Cut off the end marker (the app quit mid-recording): the text so far, marked incomplete.
         try raw.prefix(chunks[chunks.count - 1].lowerBound).write(to: url)
         let truncated = try SessionRecordingReader.read(url, vaultKey: vaultKey)
         XCTAssertEqual(truncated.text, "first\nsecond\nthird\n")
-        XCTAssertFalse(truncated.isComplete)
+        XCTAssertEqual(truncated.status, .unfinished, "cut at a chunk boundary: unfinished, not damaged")
+
+        // Cut mid-chunk (a write interrupted part-way): damaged from there on.
+        try raw.prefix(chunks[3].lowerBound + 10).write(to: url)
+        XCTAssertEqual(try SessionRecordingReader.read(url, vaultKey: vaultKey).status, .damaged)
 
         // Swap two chunks: the second one out of place doesn't authenticate.
         var swapped = Data(raw.prefix(chunks[1].lowerBound))
@@ -118,7 +134,23 @@ final class SessionRecorderTests: XCTestCase {
         try swapped.write(to: url)
         let reordered = try SessionRecordingReader.read(url, vaultKey: vaultKey)
         XCTAssertEqual(reordered.text, "", "nothing after the misplaced chunk is trusted")
-        XCTAssertFalse(reordered.isComplete)
+        XCTAssertEqual(reordered.status, .damaged)
+    }
+
+    /// While a recording is going, what's been flushed reads back, marked unfinished.
+    func testAnOpenRecordingReadsAsUnfinishedWithItsTextSoFar() throws {
+        let recorder = try SessionRecorder(directory: folder, hostName: "h", endpoint: "e", vaultKey: vaultKey)
+        XCTAssertEqual(try SessionRecordingReader.read(recorder.fileURL, vaultKey: vaultKey).status, .unfinished)
+        recorder.record(Data("$ ls\r\nfile\r\n$ ".utf8))
+        recorder.flush()
+        let partial = try SessionRecordingReader.read(recorder.fileURL, vaultKey: vaultKey)
+        XCTAssertEqual(partial.status, .unfinished)
+        XCTAssertEqual(partial.text, "$ ls\nfile\n$ ", "flush includes the unfinished prompt line")
+        recorder.record(Data("pwd\r\n/home\r\n".utf8))
+        recorder.finish()
+        let done = try SessionRecordingReader.read(recorder.fileURL, vaultKey: vaultKey)
+        XCTAssertEqual(done.status, .complete)
+        XCTAssertEqual(done.text, "$ ls\nfile\n$ pwd\n/home\n")
     }
 
     func testOutputIsBufferedIntoFewChunks() throws {

@@ -130,8 +130,10 @@ final class UISmokeTests: XCTestCase {
             await pump()
         }
 
-        await render(RecordingsView(vaultKey: key))
+        await render(RecordingsView(vaultKey: key).environmentObject(registry))
         snapshot("10-recordings")
+        await render(RecordingsView(vaultKey: key, selecting: recorder.fileURL).environmentObject(registry))
+        snapshot("11-recording-open")
 
         // Sheets and palettes on their own.
         await render(QuickConnectView(dbManager: db, vaultKey: key).environmentObject(navigator))
@@ -148,6 +150,43 @@ final class UISmokeTests: XCTestCase {
 
         registry.removeAll()
         vault.lock()
+    }
+}
+
+/// The real path: terminal output through a session into its recording, read while it's
+/// still going (as the Recordings view does) and after it stops.
+@MainActor
+final class SessionRecordingPathTests: XCTestCase {
+    func testOutputReachesTheRecordingWhileItRunsAndAfter() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("SSHoeboxRec-\(UUID().uuidString)")
+        UserDefaults.standard.set(folder.path, forKey: SessionRecording.directoryDefaultsKey)
+        defer {
+            UserDefaults.standard.removeObject(forKey: SessionRecording.directoryDefaultsKey)
+            try? FileManager.default.removeItem(at: folder)
+        }
+        let key = SymmetricKey(size: .bits256)
+        let manager = SSHSessionManager()
+        let session = TerminalSession(hostId: "h", hostName: "web-01", title: "Terminal 1", manager: manager, vaultKey: key)
+        session.startRecording()
+        let url = try XCTUnwrap(session.recorder?.fileURL)
+
+        // As the SSH session delivers output: a command, its result, and a waiting prompt.
+        manager.onOutput?(Data("\u{1B}[1mdeploy@web-01\u{1B}[0m:~$ uptime\r\n 14:33 up 9 days\r\ndeploy@web-01:~$ ".utf8))
+
+        // The flush timer seals it within a couple of seconds, prompt line included.
+        for _ in 0..<40 where (try? SessionRecordingReader.read(url, vaultKey: key))?.text.isEmpty ?? true {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        let live = try SessionRecordingReader.read(url, vaultKey: key)
+        XCTAssertEqual(live.status, .unfinished)
+        XCTAssertEqual(live.text, "deploy@web-01:~$ uptime\n 14:33 up 9 days\ndeploy@web-01:~$ ")
+
+        manager.onOutput?(Data("exit\r\n".utf8))
+        session.stopRecording()
+        let done = try SessionRecordingReader.read(url, vaultKey: key)
+        XCTAssertEqual(done.status, .complete)
+        XCTAssertEqual(done.text, "deploy@web-01:~$ uptime\n 14:33 up 9 days\ndeploy@web-01:~$ exit\n")
+        XCTAssertEqual(done.metadata.hostName, "web-01")
     }
 }
 

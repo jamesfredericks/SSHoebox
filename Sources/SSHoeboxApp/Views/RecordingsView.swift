@@ -6,6 +6,9 @@ import SSHoeboxCore
 /// Settings → Recordings: the encrypted session recordings, decrypted in memory to read.
 struct RecordingsView: View {
     let vaultKey: SymmetricKey
+    @EnvironmentObject private var registry: TerminalSessionRegistry
+    /// Re-reads a recording that's still being made, so it fills in as the session runs.
+    private let liveRefresh = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     @State private var recordings: [SessionRecording.Summary] = []
     @State private var selectedURL: URL?
@@ -14,6 +17,11 @@ struct RecordingsView: View {
     @State private var search = ""
     @State private var toDelete: SessionRecording.Summary?
     @State private var confirmExport = false
+
+    init(vaultKey: SymmetricKey, selecting url: URL? = nil) {
+        self.vaultKey = vaultKey
+        _selectedURL = State(initialValue: url?.resolvingSymlinksInPath())
+    }
 
     private var selected: SessionRecording.Summary? { recordings.first { $0.url == selectedURL } }
 
@@ -32,8 +40,14 @@ struct RecordingsView: View {
                     .help("Refresh")
             }
         }
-        .onAppear(perform: reload)
+        .onAppear {
+            reload()
+            if selectedURL != nil, contents == nil { open() }
+        }
         .onChange(of: selectedURL) { _, _ in open() }
+        .onReceive(liveRefresh) { _ in
+            if let selectedURL, registry.activeRecorder(for: selectedURL) != nil { open(keepSearch: true) }
+        }
         .alert("Delete this recording?", isPresented: Binding(get: { toDelete != nil }, set: { if !$0 { toDelete = nil } })) {
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive) { delete() }
@@ -61,7 +75,14 @@ struct RecordingsView: View {
                 List(recordings, selection: $selectedURL) { recording in
                     VStack(alignment: .leading, spacing: 2) {
                         if let metadata = recording.metadata {
-                            Text(metadata.hostName).foregroundStyle(DesignSystem.Colors.textPrimary)
+                            HStack(spacing: 6) {
+                                Text(metadata.hostName).foregroundStyle(DesignSystem.Colors.textPrimary)
+                                if registry.activeRecorder(for: recording.url) != nil {
+                                    Label("Recording", systemImage: "record.circle.fill")
+                                        .font(.caption2)
+                                        .foregroundStyle(.red)
+                                }
+                            }
                             Text(metadata.startedAt.formatted(date: .abbreviated, time: .shortened))
                                 .font(.caption)
                                 .foregroundStyle(DesignSystem.Colors.textSecondary)
@@ -117,10 +138,10 @@ struct RecordingsView: View {
                              + (contents.endedAt.map { " – \($0.formatted(date: .omitted, time: .standard))" } ?? ""))
                             .font(.caption)
                             .foregroundStyle(DesignSystem.Colors.textSecondary)
-                        if !contents.isComplete {
-                            Text("Incomplete: the recording stopped before its end (the app quit while recording, or the file is damaged).")
+                        if let note = statusNote(contents) {
+                            Label(note.text, systemImage: note.icon)
                                 .font(.caption)
-                                .foregroundStyle(.orange)
+                                .foregroundStyle(note.color)
                         }
                     }
                     Spacer()
@@ -139,12 +160,20 @@ struct RecordingsView: View {
                 }
                 .padding(DesignSystem.Spacing.medium)
                 Divider()
-                ScrollView([.vertical, .horizontal]) {
-                    Text(highlighted(contents.text))
-                        .font(.system(size: 12, design: .monospaced))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(DesignSystem.Spacing.medium)
+                ScrollView(.vertical) {
+                    if contents.text.isEmpty {
+                        Text(isLive ? "Nothing recorded yet. Output appears here a few seconds after it's shown in the terminal."
+                                    : "Nothing was recorded: the session showed no output while recording.")
+                            .foregroundStyle(DesignSystem.Colors.textSecondary)
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                            .padding(DesignSystem.Spacing.medium)
+                    } else {
+                        Text(highlighted(contents.text))
+                            .font(.system(size: 12, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                            .padding(DesignSystem.Spacing.medium)
+                    }
                 }
                 .background(Color(red: 0.05, green: 0.05, blue: 0.08))
                 if !search.isEmpty {
@@ -158,6 +187,25 @@ struct RecordingsView: View {
         } else {
             EmptyStateView(title: "Select a Recording", description: "Recordings are decrypted only to show them here.",
                            systemImage: "doc.text.magnifyingglass")
+        }
+    }
+
+    private var isLive: Bool {
+        selectedURL.map { registry.activeRecorder(for: $0) != nil } ?? false
+    }
+
+    private func statusNote(_ contents: SessionRecordingReader.Contents) -> (text: String, icon: String, color: Color)? {
+        switch contents.status {
+        case .complete:
+            return nil
+        case .unfinished where isLive:
+            return ("Recording in progress: this updates every few seconds.", "record.circle", .red)
+        case .unfinished:
+            return ("This recording wasn't closed (SSHoebox quit or the Mac shut down while it was recording). Everything saved before then is shown.",
+                    "exclamationmark.circle", .orange)
+        case .damaged:
+            return ("Part of this file doesn't decrypt: it was changed or damaged after it was written. The text before that point is shown; nothing after it is trusted.",
+                    "exclamationmark.triangle.fill", .red)
         }
     }
 
@@ -189,11 +237,18 @@ struct RecordingsView: View {
         }
     }
 
-    private func open() {
-        contents = nil
+    private func open(keepSearch: Bool = false) {
         readError = nil
-        search = ""
-        guard let selectedURL else { return }
+        if !keepSearch {
+            contents = nil
+            search = ""
+        }
+        guard let selectedURL else {
+            contents = nil
+            return
+        }
+        // Still recording: seal what's buffered so the latest output shows.
+        registry.activeRecorder(for: selectedURL)?.flush()
         do {
             contents = try SessionRecordingReader.read(selectedURL, vaultKey: vaultKey)
         } catch {
